@@ -9,7 +9,6 @@ pipeline {
     }
     options {
         timeout(time: 10, unit: 'MINUTES')
-        // A hung npm install or test run must not hold the executor forever
     }
     stages {
         stage('Install') {
@@ -31,6 +30,25 @@ pipeline {
                 dir('backend') {
                     sh 'npm test'
                 }
+            }
+        }
+        stage('Deploy Staging') {
+            when {
+                branch 'develop'
+            }
+            steps {
+                echo 'Deploying to staging environment...'
+            }
+        }
+        stage('Deploy Production') {
+            when {
+                branch 'main'
+            }
+            input {
+                message 'Deploy to production?'
+            }
+            steps {
+                echo 'Deploying to production environment...'
             }
         }
     }
