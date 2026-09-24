@@ -32,6 +32,8 @@ pipeline {
                 }
             }
         }
+        
+        // Stage สำหรับ Staging: ต้องรันอัตโนมัติบน branch develop เท่านั้น (ไม่มี input)
         stage('Deploy Staging') {
             when {
                 branch 'develop'
@@ -40,14 +42,15 @@ pipeline {
                 echo 'Deploying to staging environment...'
             }
         }
+        
+        // Stage สำหรับ Production: ต้องรันบน branch main และหยุดรออนุมัติเฉพาะเมื่อเป็น main
         stage('Deploy Production') {
             when {
                 branch 'main'
             }
-            input {
-                message 'Deploy to production?'
-            }
             steps {
+                // ย้าย input มาไว้ข้างใน steps หรือใช้ input block ร่วมกับ when ให้ถูกต้อง
+                input message: 'Deploy to production?'
                 echo 'Deploying to production environment...'
             }
         }
