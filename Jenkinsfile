@@ -14,17 +14,23 @@ pipeline {
     stages {
         stage('Install') {
             steps {
-                sh 'npm ci'
+                dir('backend') {
+                    sh 'npm ci'
+                }
             }
         }
         stage('Lint') {
             steps {
-                sh 'npm run lint'
+                dir('backend') {
+                    sh 'npm run lint'
+                }
             }
         }
         stage('Unit Test') {
             steps {
-                sh 'npm test'
+                dir('backend') {
+                    sh 'npm test'
+                }
             }
         }
     }
@@ -36,7 +42,9 @@ pipeline {
             echo "Failed at stage: ${env.STAGE_NAME}"
         }
         always {
-            archiveArtifacts artifacts: 'npm-debug.log*', allowEmptyArchive: true
+            dir('backend') {
+                archiveArtifacts artifacts: 'npm-debug.log*', allowEmptyArchive: true
+            }
         }
     }
 }
