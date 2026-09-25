@@ -83,7 +83,7 @@ pipeline {
         stage('5. Unit Test & Coverage') {
             steps {
                 dir('backend') {
-                    sh 'npm test -- --coverage --reporters=default --reporters=jest-junit'
+                    sh 'npx jest --coverage --reporters=default --reporters=jest-junit'                
                 }
             }
             post {
