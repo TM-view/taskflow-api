@@ -15,7 +15,7 @@ pipeline {
         stage('1. Secrets Detection') {
             steps {
                 echo 'Running Gitleaks secrets detection...'
-                sh 'npx gitleaks detect --source . --verbose --report-path gitleaks-report.json || true'
+                sh 'npx gitleaks detect --source . --verbose --report-path gitleaks-report.json'
             }
             post {
                 always {
