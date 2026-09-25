@@ -36,7 +36,7 @@ pipeline {
                 always {
                     dir('backend') {
                         junit allowEmptyResults: true, testResults: 'reports/junit.xml'
-                        publishCoverage adapters: [coberturaAdapter('coverage/cobertura-coverage.xml')]
+                        archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
                     }
                 }
             }
