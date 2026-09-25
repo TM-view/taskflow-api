@@ -70,7 +70,7 @@ pipeline {
             echo "${env.APP_NAME} passed all Quality Gates on ${env.NODE_ENV}"
         }
         failure {
-            echo "Failed at stage: ${env.STAGE_NAME}"
+            echo "Failed at stage: ${env.STAGE_NAME}" 
         }
         always {
             dir('backend') {
