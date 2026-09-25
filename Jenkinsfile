@@ -90,7 +90,8 @@ pipeline {
                 always {
                     dir('backend') {
                         junit 'reports/junit.xml'
-                        publishCoverage adapters: [coberturaAdapter('coverage/cobertura-coverage.xml')]
+                        // ใช้ cobertura แทน publishCoverage
+                        cobertura coberturaReportFile: 'coverage/cobertura-coverage.xml'
                     }
                 }
             }
