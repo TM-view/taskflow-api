@@ -142,10 +142,8 @@ pipeline {
             when {
                 branch 'main'
             }
-            input {
-                message 'Deploy to production?'
-            }
             steps {
+                input message: 'Deploy to production?'
                 echo 'Deploying to production environment...'
             }
         }
