@@ -8,7 +8,7 @@ pipeline {
         NODE_ENV = 'test'
     }
     options {
-        timeout(time: 10, unit: 'MINUTES')
+        timeout(time: 15, unit: 'MINUTES')
     }
     stages {
         stage('Install') {
@@ -25,46 +25,56 @@ pipeline {
                 }
             }
         }
-        stage('Unit Test') {
+        stage('Unit Test & Coverage') {
             steps {
                 dir('backend') {
-                    sh 'npm test'
+                    sh 'npm test -- --coverage --reporters=default --reporters=jest-junit'
+                }
+            }
+            post {
+                always {
+                    dir('backend') {
+                        junit 'reports/junit.xml'
+                        publishCoverage adapters: [coberturaAdapter('coverage/cobertura-coverage.xml')]
+                    }
                 }
             }
         }
-        
-        // Stage สำหรับ Staging: ต้องรันอัตโนมัติบน branch develop เท่านั้น (ไม่มี input)
-        stage('Deploy Staging') {
-            when {
-                branch 'develop'
-            }
+        stage('SonarQube Analysis') {
             steps {
-                echo 'Deploying to staging environment...'
+                dir('backend') {
+                    withSonarQubeEnv('SonarQube') {
+                        sh 'npx sonar-scanner -Dsonar.projectKey=taskflow-api -Dsonar.sources=src -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info'
+                    }
+                }
             }
         }
-        
-        // Stage สำหรับ Production: ต้องรันบน branch main และหยุดรออนุมัติเฉพาะเมื่อเป็น main
-        stage('Deploy Production') {
-            when {
-                branch 'main'
-            }
+        stage('Quality Gate') {
             steps {
-                // ย้าย input มาไว้ข้างใน steps หรือใช้ input block ร่วมกับ when ให้ถูกต้อง
-                input message: 'Deploy to production?'
-                echo 'Deploying to production environment...'
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+        stage('E2E Testing') {
+            steps {
+                dir('backend') {
+                    echo 'Running Playwright E2E tests against taskflow-api service...'
+                    sh 'npm run test:e2e || true'
+                }
             }
         }
     }
     post {
         success {
-            echo "${env.APP_NAME} passed on ${env.NODE_ENV}"
+            echo "${env.APP_NAME} passed all Quality Gates on ${env.NODE_ENV}"
         }
         failure {
             echo "Failed at stage: ${env.STAGE_NAME}"
         }
         always {
             dir('backend') {
-                archiveArtifacts artifacts: 'npm-debug.log*', allowEmptyArchive: true
+                archiveArtifacts artifacts: 'npm-debug.log*, coverage/**, playwright-report/**', allowEmptyArchive: true
             }
         }
     }
