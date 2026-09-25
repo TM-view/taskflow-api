@@ -28,13 +28,14 @@ pipeline {
         stage('Unit Test & Coverage') {
             steps {
                 dir('backend') {
-                    sh 'npm test -- --coverage --reporters=default --reporters=jest-junit'
+                    sh 'mkdir -p reports'
+                    sh 'JEST_JUNIT_OUTPUT_DIR=reports JEST_JUNIT_OUTPUT_NAME=junit.xml npm test -- --coverage --reporters=default --reporters=jest-junit'
                 }
             }
             post {
                 always {
                     dir('backend') {
-                        junit 'reports/junit.xml'
+                        junit allowEmptyResults: true, testResults: 'reports/junit.xml'
                         publishCoverage adapters: [coberturaAdapter('coverage/cobertura-coverage.xml')]
                     }
                 }
