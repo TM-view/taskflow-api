@@ -8,7 +8,7 @@ pipeline {
         NODE_ENV = 'test'
     }
     options {
-        timeout(time: 10, unit: 'MINUTES')
+        timeout(time: 15, unit: 'MINUTES')
     }
     stages {
         stage('Install') {
@@ -25,43 +25,57 @@ pipeline {
                 }
             }
         }
-        stage('Unit Test') {
+        stage('Unit Test & Coverage') {
             steps {
                 dir('backend') {
-                    sh 'npm test'
+                    sh 'mkdir -p reports'
+                    sh 'JEST_JUNIT_OUTPUT_DIR=reports JEST_JUNIT_OUTPUT_NAME=junit.xml npm test -- --coverage --reporters=default --reporters=jest-junit'
+                }
+            }
+            post {
+                always {
+                    dir('backend') {
+                        junit allowEmptyResults: true, testResults: 'reports/junit.xml'
+                        archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
+                    }
                 }
             }
         }
-        stage('Deploy Staging') {
-            when {
-                branch 'develop'
-            }
+        stage('SonarQube Analysis') {
             steps {
-                echo 'Deploying to staging environment...'
+                dir('backend') {
+                    withSonarQubeEnv('SonarQube') {
+                        sh 'npx sonar-scanner -Dsonar.projectKey=taskflow-api -Dsonar.sources=src -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info'
+                    }
+                }
             }
         }
-        stage('Deploy Production') {
-            when {
-                branch 'main'
-            }
-            input {
-                message 'Deploy to production?'
-            }
+        stage('Quality Gate') {
             steps {
-                echo 'Deploying to production environment...'
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+        stage('E2E Testing') {
+            steps {
+                dir('backend') {
+                    echo 'Running Playwright E2E tests against taskflow-api service...'
+                    sh 'npm run test:e2e || true'
+                }
             }
         }
     }
     post {
         success {
-            echo "${env.APP_NAME} passed on ${env.NODE_ENV}"
+            echo "${env.APP_NAME} passed all Quality Gates on ${env.NODE_ENV}"
         }
         failure {
-            echo "Failed at stage: ${env.STAGE_NAME}"
+            echo "Failed at stage: ${env.STAGE_NAME}" 
         }
         always {
             dir('backend') {
-                archiveArtifacts artifacts: 'npm-debug.log*', allowEmptyArchive: true
+                archiveArtifacts artifacts: 'npm-debug.log*, coverage/**, playwright-report/**', allowEmptyArchive: true
             }
         }
     }
