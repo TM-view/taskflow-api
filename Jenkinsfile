@@ -89,9 +89,10 @@ pipeline {
             post {
                 always {
                     dir('backend') {
+                        // เก็บรายงาน JUnit สำหรับแสดงผล Test Trend
                         junit 'reports/junit.xml'
-                        // ใช้ cobertura แทน publishCoverage
-                        cobertura coberturaReportFile: 'coverage/cobertura-coverage.xml'
+                        // เก็บไฟล์ Coverage ทั้งหมดเป็น Build Artifacts
+                        archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
                     }
                 }
             }
