@@ -166,11 +166,9 @@ pipeline {
         stage('11. Container Scan (Trivy)') {
             steps {
                 echo 'Scanning container image with Trivy via Docker...'
-                // เพิ่ม --scanners vuln และ --skip-db-update ในรอบแรก
-                sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache/ -v \$PWD:/workspace -w /workspace aquasec/trivy image --scanners vuln --db-repository ghcr.io/aquasecurity/trivy-db:2 --timeout 10m --format sarif -o trivy.sarif ${REGISTRY}/${APP_NAME}:${IMAGE_TAG} || true"
-                
-                // สแกนเฉพาะ Vulnerability และใช้ DB จาก Cache ในรอบที่สอง (ไม่ต้องโหลดซ้ำ)
-                sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache/ -v \$PWD:/workspace -w /workspace aquasec/trivy image --scanners vuln --skip-db-update --exit-code 1 --severity HIGH,CRITICAL ${REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
+                // เพิ่ม --network host และ --insecure ให้ Trivy ต่อเข้า localhost:5001 แบบ HTTP ได้
+                sh "docker run --rm --network host -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache/ -v \$PWD:/workspace -w /workspace aquasec/trivy image --scanners vuln --insecure --db-repository ghcr.io/aquasecurity/trivy-db:2 --timeout 10m --format sarif -o trivy.sarif ${REGISTRY}/${APP_NAME}:${IMAGE_TAG} || true"
+                sh "docker run --rm --network host -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache/ -v \$PWD:/workspace -w /workspace aquasec/trivy image --scanners vuln --insecure --skip-db-update --exit-code 1 --severity HIGH,CRITICAL ${REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
             }
             post {
                 always {
