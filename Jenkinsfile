@@ -227,35 +227,41 @@ pipeline {
                     echo "Deploying to Production Environment..."
                     def current = sh(script: "kubectl get svc taskflow -o jsonpath='{.spec.selector.color}'", returnStdout: true).trim()
                     def next = (current == 'blue') ? 'green' : 'blue'
-                    env.DEPLOY_PREVIOUS_COLOR = current
                     
+                    // บันทึกสีเดิมไว้ใน env เพื่อใช้ตอนทำ Rollback
+                    env.DEPLOY_PREVIOUS_COLOR = current
+                    env.DEPLOY_NEXT_COLOR = next
+                    
+                    echo "Current Color: ${current} -> Target Color: ${next}"
+
+                    // 1. อัปเดต Image ฝั่งใหม่
                     sh "kubectl set image deployment/taskflow-${next} taskflow-api=${K8S_REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}"
                     sh "kubectl rollout status deployment/taskflow-${next} --timeout=180s"
+                    
+                    // 2. Smoke Test (ตรงนี้ถ้าพัง จะดิ่งไปที่ post.failure ทันที)
                     sh "kubectl run smoke-${BUILD_NUMBER} --rm -i --restart=Never --image=curlimages/curl:8.12.1 --image-pull-policy=IfNotPresent -- curl -fsS http://taskflow-${next}:3000/"
+                    
+                    // 3. ถ้า Smoke Test ผ่าน จะทำการสลับ Traffic ไปสีใหม่
                     sh "kubectl set selector service/taskflow app=taskflow-api,color=${next}"
                     echo "Production: Switched traffic from ${current} to ${next}"
                 }
             }
-        }
-    }
-    post {
-        success {
-            echo "${env.APP_NAME} successfully passed all security gates, build, scanning, and blue/green deployment!"
-        }
-        failure {
-            script {
-                echo "Pipeline failed at stage: ${env.STAGE_NAME}"
-                if (env.DEPLOY_PREVIOUS_COLOR) {
-                    echo "Initiating automatic rollback..."
-                    sh "kubectl set selector service/taskflow app=taskflow-api,color=${env.DEPLOY_PREVIOUS_COLOR}"
-                    echo "Rollback completed. Traffic returned to ${env.DEPLOY_PREVIOUS_COLOR}"
-                }
-            }
-        }
-        always {
-            script {
-                if (env.IMAGE_TAG) {
-                    sh "docker rmi ${REGISTRY}/${APP_NAME}:${env.IMAGE_TAG} || true"
+            post {
+                failure {
+                    script {
+                        echo "--------------------------------------------------"
+                        echo "Deploy Failed! Initiating Automatic Rollback..."
+                        
+                        // ตรวจสอบว่ามีสีเดิมบันทึกไว้หรือไม่
+                        if (env.DEPLOY_PREVIOUS_COLOR) {
+                            echo "Forcing traffic back to previous color: ${env.DEPLOY_PREVIOUS_COLOR}"
+                            sh "kubectl set selector service/taskflow app=taskflow-api,color=${env.DEPLOY_PREVIOUS_COLOR}"
+                            echo "Rollback Completed Successfully. Active Color: ${env.DEPLOY_PREVIOUS_COLOR}"
+                        } else {
+                            echo "Rollback skipped: DEPLOY_PREVIOUS_COLOR not defined."
+                        }
+                        echo "--------------------------------------------------"
+                    }
                 }
             }
         }
