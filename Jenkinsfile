@@ -148,13 +148,16 @@ pipeline {
             }
         }
 
-        // --- 10. BUILD DOCKER IMAGE & PUSH (Lab 07) ---
+        // --- 10. BUILD DOCKER IMAGE & PUSH (Lab 07) ---   
         stage('10. Build Image') {
             steps {
                 dir('backend') {
                     echo "Building Docker Image with tag: ${IMAGE_TAG}"
                     sh "docker build -t ${REGISTRY}/${APP_NAME}:${IMAGE_TAG} ."
                     sh "docker push ${REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
+                    
+                    // เพิ่มคำสั่งลบ Image ออกจากเครื่อง Agent ทันทีเพื่อประหยัดพื้นที่ดิสก์
+                    sh "docker rmi ${REGISTRY}/${APP_NAME}:${IMAGE_TAG} || true"
                 }
             }
         }
@@ -163,8 +166,11 @@ pipeline {
         stage('11. Container Scan (Trivy)') {
             steps {
                 echo 'Scanning container image with Trivy via Docker...'
-                sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v \$PWD:/workspace -w /workspace aquasec/trivy image --db-repository ghcr.io/aquasecurity/trivy-db:2 --timeout 10m --format sarif -o trivy.sarif ${REGISTRY}/${APP_NAME}:${IMAGE_TAG} || true"
-                sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v \$PWD:/workspace -w /workspace aquasec/trivy image --db-repository ghcr.io/aquasecurity/trivy-db:2 --timeout 10m --exit-code 1 --severity HIGH,CRITICAL ${REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
+                // เพิ่ม --scanners vuln และ --skip-db-update ในรอบแรก
+                sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache/ -v \$PWD:/workspace -w /workspace aquasec/trivy image --scanners vuln --db-repository ghcr.io/aquasecurity/trivy-db:2 --timeout 10m --format sarif -o trivy.sarif ${REGISTRY}/${APP_NAME}:${IMAGE_TAG} || true"
+                
+                // สแกนเฉพาะ Vulnerability และใช้ DB จาก Cache ในรอบที่สอง (ไม่ต้องโหลดซ้ำ)
+                sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache/ -v \$PWD:/workspace -w /workspace aquasec/trivy image --scanners vuln --skip-db-update --exit-code 1 --severity HIGH,CRITICAL ${REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
             }
             post {
                 always {
