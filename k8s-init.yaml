@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: taskflow-blue
+  labels:
+    app: taskflow-api
+    color: blue
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: taskflow-api
+      color: blue
+  template:
+    metadata:
+      labels:
+        app: taskflow-api
+        color: blue
+    spec:
+      containers:
+      - name: taskflow-api
+        image: node:20-alpine
+        command: ["sh", "-c", "echo 'Blue Version Running' && sleep 3600"]
+        ports:
+        - containerPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: taskflow-green
+  labels:
+    app: taskflow-api
+    color: green
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: taskflow-api
+      color: green
+  template:
+    metadata:
+      labels:
+        app: taskflow-api
+        color: green
+    spec:
+      containers:
+      - name: taskflow-api
+        image: node:20-alpine
+        command: ["sh", "-c", "echo 'Green Version Running' && sleep 3600"]
+        ports:
+        - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: taskflow
+spec:
+  selector:
+    app: taskflow-api
+    color: blue
+  ports:
+  - protocol: TCP
+    port: 8080
+    targetPort: 8080
