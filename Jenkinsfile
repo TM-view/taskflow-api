@@ -185,14 +185,31 @@ pipeline {
             steps {
                 script {
                     echo "Deploying to Staging Environment..."
+
+                    // --- เก็บสถานะก่อนสวิตช์ ---
+                    sh "kubectl get svc taskflow -o yaml > svc-before-${BUILD_NUMBER}.yaml"
+
                     def current = sh(script: "kubectl get svc taskflow -o jsonpath='{.spec.selector.color}'", returnStdout: true).trim()
                     def next = (current == 'blue') ? 'green' : 'blue'
-                    
+
                     sh "kubectl set image deployment/taskflow-${next} taskflow-api=${REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
                     sh "kubectl rollout status deployment/taskflow-${next}"
                     sh "kubectl run smoke-${BUILD_NUMBER} --rm -i --restart=Never --image=curlimages/curl -- curl -sf http://taskflow-${next}:8080/health || true"
                     sh "kubectl patch svc taskflow -p '{\"spec\":{\"selector\":{\"color\":\"${next}\"}}}'"
+
+                    // --- เก็บสถานะหลังสวิตช์ ---
+                    sh "kubectl get svc taskflow -o yaml > svc-after-${BUILD_NUMBER}.yaml"
+
+                    // --- สร้าง diff ให้เห็นชัดๆ ---
+                    sh "diff svc-before-${BUILD_NUMBER}.yaml svc-after-${BUILD_NUMBER}.yaml > svc-diff-${BUILD_NUMBER}.txt || true"
+                    sh "cat svc-diff-${BUILD_NUMBER}.txt"
+
                     echo "Staging: Switched traffic from ${current} to ${next}"
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'svc-before-*.yaml, svc-after-*.yaml, svc-diff-*.txt', allowEmptyArchive: true
                 }
             }
         }
