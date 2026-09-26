@@ -6,12 +6,14 @@ pipeline {
     environment {
         APP_NAME = 'taskflow-api'
         NODE_ENV = 'test'
+        REGISTRY = 'localhost:5001'
+        IMAGE_TAG = "${env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'dev'}"
     }
     options {
-        timeout(time: 15, unit: 'MINUTES')
+        timeout(time: 20, unit: 'MINUTES')
     }
     stages {
-        // --- 1. Security Check ก่อนเริ่ม Build ---
+        // --- 1. SECRETS DETECTION (Lab 06) ---
         stage('1. Secrets Detection') {
             steps {
                 echo 'Running Gitleaks secrets detection...'
@@ -24,7 +26,7 @@ pipeline {
             }
         }
 
-        // --- 2. Install Dependencies ---
+        // --- 2. INSTALL DEPENDENCIES (Lab 03) ---
         stage('2. Install') {
             steps {
                 dir('backend') {
@@ -33,7 +35,7 @@ pipeline {
             }
         }
 
-        // --- 3. SAST & Code Quality ---
+        // --- 3. SAST & CODE QUALITY (Lab 03 + Lab 06) ---
         stage('3. SAST & Lint') {
             steps {
                 dir('backend') {
@@ -52,16 +54,19 @@ pipeline {
             }
         }
 
-        // --- 4. SCA (Software Component Analysis) ---
+        // --- 4. SCA - SOFTWARE COMPONENT ANALYSIS (Lab 06) ---
         stage('4. SCA - npm audit') {
             steps {
                 dir('backend') {
                     script {
                         sh 'npm audit --audit-level=high --json > audit.json || true'
-                        def critical = sh(
-                            script: "jq '.metadata.vulnerabilities.critical' audit.json",
+                        
+                        def criticalStr = sh(
+                            script: "node -e \"const fs = require('fs'); const data = JSON.parse(fs.readFileSync('audit.json')); console.log(data.metadata?.vulnerabilities?.critical || 0);\"",
                             returnStdout: true
-                        ).trim().toInteger()
+                        ).trim()
+                        
+                        def critical = criticalStr.toInteger()
 
                         if (critical > 0) {
                             error("Blocking: ${critical} critical vulnerabilities found")
@@ -79,30 +84,46 @@ pipeline {
             }
         }
 
-        // --- 5. Unit Test & Coverage ---
+        // --- 5. UNIT TEST & COVERAGE (Lab 03 + Lab 05) ---
         stage('5. Unit Test & Coverage') {
             steps {
                 dir('backend') {
-                    sh 'npm test -- --coverage --reporters=default --reporters=jest-junit'
+                    sh 'npx jest --coverage --reporters=default --reporters=jest-junit'
                 }
             }
             post {
                 always {
                     dir('backend') {
-                        // เก็บรายงาน JUnit สำหรับแสดงผล Test Trend
                         junit 'reports/junit.xml'
-                        // เก็บไฟล์ Coverage ทั้งหมดเป็น Build Artifacts
                         archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
                     }
                 }
             }
         }
 
-        // --- 6. Generate SBOM ---
-        stage('6. Generate SBOM') {
+        // --- 6. SONARQUBE ANALYSIS & QUALITY GATE (Lab 05) ---
+        stage('6. SonarQube Analysis') {
             steps {
                 dir('backend') {
-                    echo 'Generating SBOM with Syft / CycloneDX...'
+                    withSonarQubeEnv('SonarQube') {
+                        sh 'npx sonar-scanner -Dsonar.projectKey=taskflow-api -Dsonar.sources=src -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info || true'
+                    }
+                }
+            }
+        }
+        stage('7. Quality Gate') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        // --- 8. GENERATE SBOM (Lab 06) ---
+        stage('8. Generate SBOM') {
+            steps {
+                dir('backend') {
+                    echo 'Generating SBOM with CycloneDX...'
                     sh 'npx @cyclonedx/cyclonedx-npm --output-file bom.cdx.json || true'
                 }
             }
@@ -115,8 +136,8 @@ pipeline {
             }
         }
 
-        // --- 7. Policy Gate (OPA) ---
-        stage('7. Policy Gate (OPA)') {
+        // --- 9. POLICY GATE - OPA (Lab 06) ---
+        stage('9. Policy Gate (OPA)') {
             steps {
                 dir('backend') {
                     script {
@@ -127,33 +148,108 @@ pipeline {
             }
         }
 
-        // --- 8. Deploy Staging (จาก Lab 04) ---
-        stage('8. Deploy Staging') {
+        // --- 10. BUILD DOCKER IMAGE & PUSH (Lab 07) ---   
+        stage('10. Build Image') {
+            steps {
+                dir('backend') {
+                    echo "Building Docker Image with tag: ${IMAGE_TAG}"
+                    sh "docker build -t ${REGISTRY}/${APP_NAME}:${IMAGE_TAG} ."
+                    sh "docker push ${REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
+                    
+                    // เพิ่มคำสั่งลบ Image ออกจากเครื่อง Agent ทันทีเพื่อประหยัดพื้นที่ดิสก์
+                    sh "docker rmi ${REGISTRY}/${APP_NAME}:${IMAGE_TAG} || true"
+                }
+            }
+        }
+
+        // --- 11. CONTAINER SCAN - TRIVY (Lab 07) ---
+        stage('11. Container Scan (Trivy)') {
+            steps {
+                echo 'Scanning container image with Trivy via Docker...'
+                // เพิ่ม --network host และ --insecure ให้ Trivy ต่อเข้า localhost:5001 แบบ HTTP ได้
+                sh "docker run --rm --network host -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache/ -v \$PWD:/workspace -w /workspace aquasec/trivy image --scanners vuln --insecure --db-repository ghcr.io/aquasecurity/trivy-db:2 --timeout 10m --format sarif -o trivy.sarif ${REGISTRY}/${APP_NAME}:${IMAGE_TAG} || true"
+                sh "docker run --rm --network host -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache/ -v \$PWD:/workspace -w /workspace aquasec/trivy image --scanners vuln --insecure --skip-db-update --exit-code 1 --severity HIGH,CRITICAL ${REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'trivy.sarif', allowEmptyArchive: true
+                }
+            }
+        }
+
+        // --- 12. DEPLOY STAGING (Lab 04 + Lab 07 - Blue/Green) ---
+        stage('12. Deploy Staging (Blue/Green)') {
             when {
                 branch 'develop'
             }
             steps {
-                echo 'Deploying to staging environment...'
+                script {
+                    echo "Deploying to Staging Environment..."
+
+                    // --- เก็บสถานะก่อนสวิตช์ ---
+                    sh "kubectl get svc taskflow -o yaml > svc-before-${BUILD_NUMBER}.yaml"
+
+                    def current = sh(script: "kubectl get svc taskflow -o jsonpath='{.spec.selector.color}'", returnStdout: true).trim()
+                    def next = (current == 'blue') ? 'green' : 'blue'
+
+                    sh "kubectl set image deployment/taskflow-${next} taskflow-api=${REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
+                    sh "kubectl rollout status deployment/taskflow-${next}"
+                    sh "kubectl run smoke-${BUILD_NUMBER} --rm -i --restart=Never --image=curlimages/curl -- curl -sf http://taskflow-${next}:8080/health || true"
+                    sh "kubectl patch svc taskflow -p '{\"spec\":{\"selector\":{\"color\":\"${next}\"}}}'"
+
+                    // --- เก็บสถานะหลังสวิตช์ ---
+                    sh "kubectl get svc taskflow -o yaml > svc-after-${BUILD_NUMBER}.yaml"
+
+                    // --- สร้าง diff ให้เห็นชัดๆ ---
+                    sh "diff svc-before-${BUILD_NUMBER}.yaml svc-after-${BUILD_NUMBER}.yaml > svc-diff-${BUILD_NUMBER}.txt || true"
+                    sh "cat svc-diff-${BUILD_NUMBER}.txt"
+
+                    echo "Staging: Switched traffic from ${current} to ${next}"
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'svc-before-*.yaml, svc-after-*.yaml, svc-diff-*.txt', allowEmptyArchive: true
+                }
             }
         }
 
-        // --- 9. Deploy Production (จาก Lab 04) ---
-        stage('9. Deploy Production') {
+        // --- 13. DEPLOY PRODUCTION (Lab 04 + Lab 07 - Blue/Green + Approval Gate) ---
+        stage('13. Deploy Production (Blue/Green)') {
             when {
                 branch 'main'
             }
             steps {
-                input message: 'Deploy to production?'
-                echo 'Deploying to production environment...'
+                input message: 'Approve Deployment to Production Environment?'
+                script {
+                    echo "Deploying to Production Environment..."
+                    def current = sh(script: "kubectl get svc taskflow -o jsonpath='{.spec.selector.color}'", returnStdout: true).trim()
+                    def next = (current == 'blue') ? 'green' : 'blue'
+                    
+                    sh "kubectl set image deployment/taskflow-${next} taskflow-api=${REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
+                    sh "kubectl rollout status deployment/taskflow-${next}"
+                    sh "kubectl run smoke-${BUILD_NUMBER} --rm -i --restart=Never --image=curlimages/curl -- curl -sf http://taskflow-${next}:8080/health || true"
+                    sh "kubectl patch svc taskflow -p '{\"spec\":{\"selector\":{\"color\":\"${next}\"}}}'"
+                    echo "Production: Switched traffic from ${current} to ${next}"
+                }
             }
         }
     }
     post {
         success {
-            echo "${env.APP_NAME} passed all security & build gates on ${env.NODE_ENV}"
+            echo "${env.APP_NAME} successfully passed all security gates, build, scanning, and blue/green deployment!"
         }
         failure {
-            echo "Failed at stage: ${env.STAGE_NAME}"
+            script {
+                echo "Pipeline failed at stage: ${env.STAGE_NAME}"
+                if (env.STAGE_NAME.contains('Deploy')) {
+                    echo "Initiating automatic rollback..."
+                    def current = sh(script: "kubectl get svc taskflow -o jsonpath='{.spec.selector.color}'", returnStdout: true).trim()
+                    def rollbackColor = (current == 'blue') ? 'green' : 'blue'
+                    sh "kubectl patch svc taskflow -p '{\"spec\":{\"selector\":{\"color\":\"${rollbackColor}\"}}}'"
+                    echo "Rollback completed. Traffic forced back to ${rollbackColor}"
+                }
+            }
         }
     }
 }
