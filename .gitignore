@@ -30,3 +30,7 @@ Thumbs.db
 
 #backend
 node_modules/
+
+kubeconfig-internal.yaml
+*.kubeconfig
+.kube/

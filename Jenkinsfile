@@ -8,6 +8,7 @@ pipeline {
         NODE_ENV = 'test'
         REGISTRY = 'localhost:5001'
         IMAGE_TAG = "${env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'dev'}"
+        KUBECONFIG = '/var/jenkins_home/.kube/config'
     }
     options {
         timeout(time: 20, unit: 'MINUTES')
