@@ -162,9 +162,9 @@ pipeline {
         // --- 11. CONTAINER SCAN - TRIVY (Lab 07) ---
         stage('11. Container Scan (Trivy)') {
             steps {
-                echo 'Scanning container image with Trivy...'
-                sh "npx trivy image --format sarif -o trivy.sarif ${REGISTRY}/${APP_NAME}:${IMAGE_TAG} || true"
-                sh "npx trivy image --exit-code 1 --severity HIGH,CRITICAL ${REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
+                echo 'Scanning container image with Trivy via Docker...'
+                sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image --format sarif -o trivy.sarif ${REGISTRY}/${APP_NAME}:${IMAGE_TAG} || true"
+                sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image --exit-code 1 --severity HIGH,CRITICAL ${REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
             }
             post {
                 always {
