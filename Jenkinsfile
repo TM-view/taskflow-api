@@ -163,7 +163,8 @@ pipeline {
         stage('11. Container Scan (Trivy)') {
             steps {
                 echo 'Scanning container image with Trivy via Docker...'
-                sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image --format sarif -o trivy.sarif ${REGISTRY}/${APP_NAME}:${IMAGE_TAG} || true"
+                // Mount $PWD ไปที่ /workspace เพื่อให้ไฟล์ trivy.sarif ถูกเขียนลง Jenkins Workspace จริง
+                sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v \$PWD:/workspace -w /workspace aquasec/trivy image --format sarif -o trivy.sarif ${REGISTRY}/${APP_NAME}:${IMAGE_TAG} || true"
                 sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image --exit-code 1 --severity HIGH,CRITICAL ${REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
             }
             post {

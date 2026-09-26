@@ -71,6 +71,13 @@
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.20.0"
   },
+  "overrides": {
+    "brace-expansion": "^5.0.9",
+    "ip-address": "^10.3.1",
+    "pacote": "^21.5.1",
+    "picomatch": "^4.0.4",
+    "sigstore": "^4.1.1"
+  },
   "jest-junit": {
     "outputDirectory": "reports",
     "outputName": "junit.xml"
