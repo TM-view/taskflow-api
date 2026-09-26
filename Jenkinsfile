@@ -163,9 +163,8 @@ pipeline {
         stage('11. Container Scan (Trivy)') {
             steps {
                 echo 'Scanning container image with Trivy via Docker...'
-                // เพิ่ม --db-repository และ --timeout 10m เพื่อป้องกัน Network Timeout
                 sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v \$PWD:/workspace -w /workspace aquasec/trivy image --db-repository ghcr.io/aquasecurity/trivy-db:2 --timeout 10m --format sarif -o trivy.sarif ${REGISTRY}/${APP_NAME}:${IMAGE_TAG} || true"
-                sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image --db-repository ghcr.io/aquasecurity/trivy-db:2 --timeout 10m --exit-code 1 --severity HIGH,CRITICAL ${REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
+                sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v \$PWD:/workspace -w /workspace aquasec/trivy image --db-repository ghcr.io/aquasecurity/trivy-db:2 --timeout 10m --exit-code 1 --severity HIGH,CRITICAL ${REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
             }
             post {
                 always {
