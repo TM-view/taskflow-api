@@ -7,7 +7,7 @@ pipeline {
         APP_NAME = 'taskflow-api'
         NODE_ENV = 'test'
         REGISTRY = 'localhost:5001'
-        IMAGE_TAG = "${env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'dev'}"
+        K8S_REGISTRY = 'registry:5000'
         KUBECONFIG = '/var/jenkins_home/.kube/config'
     }
     options {
@@ -153,12 +153,13 @@ pipeline {
         stage('10. Build Image') {
             steps {
                 dir('backend') {
-                    echo "Building Docker Image with tag: ${IMAGE_TAG}"
-                    sh "docker build -t ${REGISTRY}/${APP_NAME}:${IMAGE_TAG} ."
-                    sh "docker push ${REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
-                    
-                    // เพิ่มคำสั่งลบ Image ออกจากเครื่อง Agent ทันทีเพื่อประหยัดพื้นที่ดิสก์
-                    sh "docker rmi ${REGISTRY}/${APP_NAME}:${IMAGE_TAG} || true"
+                    script {
+                        env.IMAGE_TAG = sh(script: 'git rev-parse --short=7 HEAD', returnStdout: true).trim()
+                        echo "Building Docker Image with tag: ${env.IMAGE_TAG}"
+                        sh "docker build -t ${REGISTRY}/${APP_NAME}:${env.IMAGE_TAG} ."
+                        sh "docker push ${REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}"
+                        sh "docker exec taskflow-cluster-control-plane ctr -n k8s.io images pull --plain-http ${K8S_REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}"
+                    }
                 }
             }
         }
@@ -167,9 +168,8 @@ pipeline {
         stage('11. Container Scan (Trivy)') {
             steps {
                 echo 'Scanning container image with Trivy via Docker...'
-                // เพิ่ม --network host และ --insecure ให้ Trivy ต่อเข้า localhost:5001 แบบ HTTP ได้
-                sh "docker run --rm --network host -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache/ -v \$PWD:/workspace -w /workspace aquasec/trivy image --scanners vuln --insecure --db-repository ghcr.io/aquasecurity/trivy-db:2 --timeout 10m --format sarif -o trivy.sarif ${REGISTRY}/${APP_NAME}:${IMAGE_TAG} || true"
-                sh "docker run --rm --network host -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache/ -v \$PWD:/workspace -w /workspace aquasec/trivy image --scanners vuln --insecure --skip-db-update --exit-code 1 --severity HIGH,CRITICAL ${REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
+                sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache/ aquasec/trivy image --scanners vuln --timeout 10m --format sarif ${REGISTRY}/${APP_NAME}:${env.IMAGE_TAG} > trivy.sarif"
+                sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache/ -v \$PWD:/workspace -w /workspace aquasec/trivy image --scanners vuln --skip-db-update --exit-code 1 --severity HIGH,CRITICAL ${REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}"
             }
             post {
                 always {
@@ -192,11 +192,12 @@ pipeline {
 
                     def current = sh(script: "kubectl get svc taskflow -o jsonpath='{.spec.selector.color}'", returnStdout: true).trim()
                     def next = (current == 'blue') ? 'green' : 'blue'
+                    env.DEPLOY_PREVIOUS_COLOR = current
 
-                    sh "kubectl set image deployment/taskflow-${next} taskflow-api=${REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
-                    sh "kubectl rollout status deployment/taskflow-${next}"
-                    sh "kubectl run smoke-${BUILD_NUMBER} --rm -i --restart=Never --image=curlimages/curl -- curl -sf http://taskflow-${next}:8080/health || true"
-                    sh "kubectl patch svc taskflow -p '{\"spec\":{\"selector\":{\"color\":\"${next}\"}}}'"
+                    sh "kubectl set image deployment/taskflow-${next} taskflow-api=${K8S_REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}"
+                    sh "kubectl rollout status deployment/taskflow-${next} --timeout=180s"
+                    sh "kubectl run smoke-${BUILD_NUMBER} --rm -i --restart=Never --image=curlimages/curl:8.12.1 --image-pull-policy=IfNotPresent -- curl -fsS http://taskflow-${next}:3000/"
+                    sh "kubectl set selector service/taskflow app=taskflow-api,color=${next}"
 
                     // --- เก็บสถานะหลังสวิตช์ ---
                     sh "kubectl get svc taskflow -o yaml > svc-after-${BUILD_NUMBER}.yaml"
@@ -226,11 +227,12 @@ pipeline {
                     echo "Deploying to Production Environment..."
                     def current = sh(script: "kubectl get svc taskflow -o jsonpath='{.spec.selector.color}'", returnStdout: true).trim()
                     def next = (current == 'blue') ? 'green' : 'blue'
+                    env.DEPLOY_PREVIOUS_COLOR = current
                     
-                    sh "kubectl set image deployment/taskflow-${next} taskflow-api=${REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
-                    sh "kubectl rollout status deployment/taskflow-${next}"
-                    sh "kubectl run smoke-${BUILD_NUMBER} --rm -i --restart=Never --image=curlimages/curl -- curl -sf http://taskflow-${next}:8080/health || true"
-                    sh "kubectl patch svc taskflow -p '{\"spec\":{\"selector\":{\"color\":\"${next}\"}}}'"
+                    sh "kubectl set image deployment/taskflow-${next} taskflow-api=${K8S_REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}"
+                    sh "kubectl rollout status deployment/taskflow-${next} --timeout=180s"
+                    sh "kubectl run smoke-${BUILD_NUMBER} --rm -i --restart=Never --image=curlimages/curl:8.12.1 --image-pull-policy=IfNotPresent -- curl -fsS http://taskflow-${next}:3000/"
+                    sh "kubectl set selector service/taskflow app=taskflow-api,color=${next}"
                     echo "Production: Switched traffic from ${current} to ${next}"
                 }
             }
@@ -243,12 +245,17 @@ pipeline {
         failure {
             script {
                 echo "Pipeline failed at stage: ${env.STAGE_NAME}"
-                if (env.STAGE_NAME.contains('Deploy')) {
+                if (env.DEPLOY_PREVIOUS_COLOR) {
                     echo "Initiating automatic rollback..."
-                    def current = sh(script: "kubectl get svc taskflow -o jsonpath='{.spec.selector.color}'", returnStdout: true).trim()
-                    def rollbackColor = (current == 'blue') ? 'green' : 'blue'
-                    sh "kubectl patch svc taskflow -p '{\"spec\":{\"selector\":{\"color\":\"${rollbackColor}\"}}}'"
-                    echo "Rollback completed. Traffic forced back to ${rollbackColor}"
+                    sh "kubectl set selector service/taskflow app=taskflow-api,color=${env.DEPLOY_PREVIOUS_COLOR}"
+                    echo "Rollback completed. Traffic returned to ${env.DEPLOY_PREVIOUS_COLOR}"
+                }
+            }
+        }
+        always {
+            script {
+                if (env.IMAGE_TAG) {
+                    sh "docker rmi ${REGISTRY}/${APP_NAME}:${env.IMAGE_TAG} || true"
                 }
             }
         }
