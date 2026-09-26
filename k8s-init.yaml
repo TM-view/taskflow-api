@@ -1,3 +1,67 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: taskflow-db
+type: Opaque
+stringData:
+  username: root
+  password: root
+  database: taskflow
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: taskflow-postgres
+  labels:
+    app: taskflow-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: taskflow-postgres
+  template:
+    metadata:
+      labels:
+        app: taskflow-postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:16-alpine
+        env:
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: taskflow-db
+              key: username
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: taskflow-db
+              key: password
+        - name: POSTGRES_DB
+          valueFrom:
+            secretKeyRef:
+              name: taskflow-db
+              key: database
+        ports:
+        - containerPort: 5432
+        readinessProbe:
+          exec:
+            command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: taskflow-postgres
+spec:
+  selector:
+    app: taskflow-postgres
+  ports:
+  - port: 5432
+    targetPort: 5432
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,12 +81,54 @@ spec:
         app: taskflow-api
         color: blue
     spec:
+      initContainers:
+      - name: wait-for-postgres
+        image: postgres:16-alpine
+        command:
+        - sh
+        - -c
+        - until pg_isready -h taskflow-postgres -p 5432 -U root -d taskflow; do echo waiting for postgres; sleep 2; done
       containers:
       - name: taskflow-api
-        image: node:20-alpine
-        command: ["sh", "-c", "echo 'Blue Version Running' && sleep 3600"]
+        image: registry:5000/taskflow-api:bootstrap
         ports:
-        - containerPort: 8080
+        - containerPort: 3000
+        env:
+        - name: PORT
+          value: "3000"
+        - name: NODE_ENV
+          value: production
+        - name: DB_HOST
+          value: taskflow-postgres
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: taskflow-db
+              key: username
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: taskflow-db
+              key: password
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: taskflow-db
+              key: database
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 20
+          periodSeconds: 10
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -43,12 +149,54 @@ spec:
         app: taskflow-api
         color: green
     spec:
+      initContainers:
+      - name: wait-for-postgres
+        image: postgres:16-alpine
+        command:
+        - sh
+        - -c
+        - until pg_isready -h taskflow-postgres -p 5432 -U root -d taskflow; do echo waiting for postgres; sleep 2; done
       containers:
       - name: taskflow-api
-        image: node:20-alpine
-        command: ["sh", "-c", "echo 'Green Version Running' && sleep 3600"]
+        image: registry:5000/taskflow-api:bootstrap
         ports:
-        - containerPort: 8080
+        - containerPort: 3000
+        env:
+        - name: PORT
+          value: "3000"
+        - name: NODE_ENV
+          value: production
+        - name: DB_HOST
+          value: taskflow-postgres
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: taskflow-db
+              key: username
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: taskflow-db
+              key: password
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: taskflow-db
+              key: database
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 20
+          periodSeconds: 10
 ---
 apiVersion: v1
 kind: Service
@@ -60,5 +208,29 @@ spec:
     color: blue
   ports:
   - protocol: TCP
-    port: 8080
-    targetPort: 8080
+    port: 3000
+    targetPort: 3000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: taskflow-blue
+spec:
+  selector:
+    app: taskflow-api
+    color: blue
+  ports:
+  - port: 3000
+    targetPort: 3000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: taskflow-green
+spec:
+  selector:
+    app: taskflow-api
+    color: green
+  ports:
+  - port: 3000
+    targetPort: 3000
