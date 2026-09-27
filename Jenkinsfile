@@ -249,10 +249,10 @@ pipeline {
             steps {
                 sh '''
                     if ! docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
-                        amazon/aws-cli:2 --endpoint-url "$LOCALSTACK_ENDPOINT" \
+                        amazon/aws-cli:latest --endpoint-url "$LOCALSTACK_ENDPOINT" \
                         s3api head-bucket --bucket taskflow-tfstate >/dev/null 2>&1; then
                         docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
-                            amazon/aws-cli:2 --endpoint-url "$LOCALSTACK_ENDPOINT" \
+                            amazon/aws-cli:latest --endpoint-url "$LOCALSTACK_ENDPOINT" \
                             s3api create-bucket --bucket taskflow-tfstate
                     fi
                 '''
