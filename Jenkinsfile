@@ -217,15 +217,15 @@ pipeline {
                 stage('Terraform Validate') {
                     steps {
                         dir('infra/terraform') {
-                            sh 'docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 fmt -check -recursive'
-                            sh 'docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 init -backend=false'
-                            sh 'docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 validate'
+                            sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 fmt -check -recursive'
+                            sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 init -backend=false'
+                            sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 validate'
                         }
                     }
                 }
                 stage('Ansible Lint') {
                     steps {
-                        sh 'docker run --rm -v "$WORKSPACE:/work" -w /work/infra/ansible cytopia/ansible-lint:latest playbook.yml'
+                        sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/ansible" cytopia/ansible-lint:latest playbook.yml'
                     }
                 }
             }
@@ -234,8 +234,8 @@ pipeline {
         stage('14. IaC Security Scan') {
             when { branch 'lab08' }
             steps {
-                sh 'docker run --rm -v "$WORKSPACE:/src" aquasec/tfsec:latest /src/infra/terraform --format json > tfsec-report.json'
-                sh 'docker run --rm -v "$WORKSPACE:/src" bridgecrew/checkov:latest -d /src/infra/terraform -o json > checkov-report.json'
+                sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE" aquasec/tfsec:latest "$WORKSPACE/infra/terraform" --format json > tfsec-report.json'
+                sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE" bridgecrew/checkov:latest -d "$WORKSPACE/infra/terraform" -o json > checkov-report.json'
             }
             post {
                 always {
@@ -263,9 +263,9 @@ pipeline {
             when { branch 'lab08' }
             steps {
                 dir('infra/terraform') {
-                    sh 'docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 init -input=false -reconfigure'
-                    sh 'docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 plan -input=false -out=tfplan'
-                    sh 'docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 show -no-color tfplan > plan-summary.txt'
+                    sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 init -input=false -reconfigure'
+                    sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 plan -input=false -out=tfplan'
+                    sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 show -no-color tfplan > plan-summary.txt'
                 }
             }
             post {
@@ -289,15 +289,15 @@ pipeline {
             when { branch 'lab08' }
             steps {
                 dir('infra/terraform') {
-                    sh 'docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 apply -input=false -auto-approve tfplan'
+                    sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 apply -input=false -auto-approve tfplan'
                 }
                 script {
                     def instanceIp = sh(
-                        script: 'docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 output -raw instance_ip',
+                        script: 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 output -raw instance_ip',
                         returnStdout: true
                     ).trim()
                     env.LOCALSTACK_INSTANCE_ID = sh(
-                        script: 'docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 output -raw instance_id',
+                        script: 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 output -raw instance_id',
                         returnStdout: true
                     ).trim()
                     def sshPort = sh(
@@ -306,7 +306,7 @@ pipeline {
                     ).trim()
 
                     writeFile file: 'infra/ansible/inventory.ini', text: """[taskflow]
-host.docker.internal ansible_port=${sshPort} ansible_user=root ansible_ssh_private_key_file=/work/.lab08/taskflow-api ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+host.docker.internal ansible_port=${sshPort} ansible_user=root ansible_ssh_private_key_file=${env.WORKSPACE}/.lab08/taskflow-api ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
 """
                     echo "Terraform provisioned the Lab 08 host at ${instanceIp}"
                 }
@@ -316,8 +316,8 @@ host.docker.internal ansible_port=${sshPort} ansible_user=root ansible_ssh_priva
         stage('19. Configure Host with Ansible') {
             when { branch 'lab08' }
             steps {
-                sh 'docker run --rm --add-host=host.docker.internal:host-gateway -v "$WORKSPACE:/work" -w /work --entrypoint ansible cytopia/ansible-lint:latest all -i infra/ansible/inventory.ini -m wait_for_connection -a timeout=180'
-                sh "docker run --rm --add-host=host.docker.internal:host-gateway -v \"${env.WORKSPACE}:/work\" -w /work --entrypoint ansible-playbook cytopia/ansible-lint:latest -i infra/ansible/inventory.ini infra/ansible/playbook.yml --extra-vars 'taskflow_image=localhost:5001/${APP_NAME}:${env.IMAGE_TAG}'"
+                sh 'docker run --rm --add-host=host.docker.internal:host-gateway --volumes-from jenkins -w "$WORKSPACE" --entrypoint ansible cytopia/ansible-lint:latest all -i infra/ansible/inventory.ini -m wait_for_connection -a timeout=180'
+                sh "docker run --rm --add-host=host.docker.internal:host-gateway --volumes-from jenkins -w \"${env.WORKSPACE}\" --entrypoint ansible-playbook cytopia/ansible-lint:latest -i infra/ansible/inventory.ini infra/ansible/playbook.yml --extra-vars 'taskflow_image=localhost:5001/${APP_NAME}:${env.IMAGE_TAG}'"
             }
         }
 
@@ -326,8 +326,8 @@ host.docker.internal ansible_port=${sshPort} ansible_user=root ansible_ssh_priva
             steps {
                 input message: 'After saving the plan and apply evidence, approve Terraform destroy to leave no lab resources running.'
                 dir('infra/terraform') {
-                    sh 'docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 destroy -input=false -auto-approve'
-                    sh 'test -z "$(docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 state list)"'
+                    sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 destroy -input=false -auto-approve'
+                    sh 'test -z "$(docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 state list)"'
                 }
             }
         }
