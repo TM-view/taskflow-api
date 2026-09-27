@@ -34,3 +34,11 @@ node_modules/
 kubeconfig-internal.yaml
 *.kubeconfig
 .kube/
+
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+infra/ansible/inventory.ini
+.lab08/

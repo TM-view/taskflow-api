@@ -1,0 +1,28 @@
+---
+- name: Configure Taskflow API Host
+  hosts: all
+  become: true
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+  tasks:
+    - name: Install Node.js and Docker CLI
+      ansible.builtin.apt:
+        name:
+          - nodejs
+          - docker.io
+        state: present
+        update_cache: true
+
+    - name: Ensure Docker service is running
+      ansible.builtin.service:
+        name: docker
+        state: stopped
+        enabled: false
+
+    - name: Verify Docker can reach its daemon
+      ansible.builtin.command: docker info
+      changed_when: false
+
+    - name: Pull the Taskflow image built by Jenkins
+      ansible.builtin.command: "docker pull {{ taskflow_image }}"
+      changed_when: true

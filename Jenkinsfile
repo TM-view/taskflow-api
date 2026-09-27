@@ -9,9 +9,13 @@ pipeline {
         REGISTRY = 'localhost:5001'
         K8S_REGISTRY = 'registry:5000'
         KUBECONFIG = '/var/jenkins_home/.kube/config'
+        LOCALSTACK_ENDPOINT = 'http://host.docker.internal:4566'
+        AWS_ACCESS_KEY_ID = 'test'
+        AWS_SECRET_ACCESS_KEY = 'test'
+        AWS_DEFAULT_REGION = 'us-east-1'
     }
     options {
-        timeout(time: 20, unit: 'MINUTES')
+        timeout(time: 30, unit: 'MINUTES')
     }
     parameters {
         booleanParam(
@@ -187,7 +191,7 @@ pipeline {
             steps {
                 echo 'Scanning container image with Trivy via Docker...'
                 sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache/ aquasec/trivy image --scanners vuln --timeout 10m --format sarif ${REGISTRY}/${APP_NAME}:${env.IMAGE_TAG} > trivy.sarif"
-                sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache/ -v \$PWD:/workspace -w /workspace aquasec/trivy image --scanners vuln --skip-db-update --exit-code 1 --severity HIGH,CRITICAL ${REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}"
+                sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v \$PWD:/workspace -w /workspace aquasec/trivy image --scanners vuln --skip-db-update --exit-code 1 --severity HIGH,CRITICAL ${REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}"
             }
             post {
                 always {
@@ -196,8 +200,140 @@ pipeline {
             }
         }
 
-        // --- 12. DEPLOY STAGING (Lab 04 + Lab 07 - Blue/Green) ---
-        stage('12. Deploy Staging (Blue/Green)') {
+        // --- 12. IAC LINT & VALIDATE & SCAN (Lab 08) ---
+        stage('12. Prepare Lab 08 SSH Key') {
+            when { branch 'lab08' }
+            steps {
+                script {
+                    sh 'mkdir -p .lab08; if [ ! -f .lab08/taskflow-api ]; then ssh-keygen -q -t ed25519 -N "" -f .lab08/taskflow-api; fi; chmod 600 .lab08/taskflow-api'
+                    env.TF_VAR_ssh_public_key = readFile('.lab08/taskflow-api.pub').trim()
+                }
+            }
+        }
+
+        stage('13. IaC Lint & Validate') {
+            when { branch 'lab08' }
+            parallel {
+                stage('Terraform Validate') {
+                    steps {
+                        dir('infra/terraform') {
+                            sh 'docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 fmt -check -recursive'
+                            sh 'docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 init -backend=false'
+                            sh 'docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 validate'
+                        }
+                    }
+                }
+                stage('Ansible Lint') {
+                    steps {
+                        sh 'docker run --rm -v "$WORKSPACE:/work" -w /work/infra/ansible cytopia/ansible-lint:latest playbook.yml'
+                    }
+                }
+            }
+        }
+
+        stage('14. IaC Security Scan') {
+            when { branch 'lab08' }
+            steps {
+                sh 'docker run --rm -v "$WORKSPACE:/src" aquasec/tfsec:latest /src/infra/terraform --format json > tfsec-report.json'
+                sh 'docker run --rm -v "$WORKSPACE:/src" bridgecrew/checkov:latest -d /src/infra/terraform -o json > checkov-report.json'
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'tfsec-report.json, checkov-report.json', allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('15. Prepare LocalStack State Bucket') {
+            when { branch 'lab08' }
+            steps {
+                sh '''
+                    if ! docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
+                        amazon/aws-cli:2 --endpoint-url "$LOCALSTACK_ENDPOINT" \
+                        s3api head-bucket --bucket taskflow-tfstate >/dev/null 2>&1; then
+                        docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
+                            amazon/aws-cli:2 --endpoint-url "$LOCALSTACK_ENDPOINT" \
+                            s3api create-bucket --bucket taskflow-tfstate
+                    fi
+                '''
+            }
+        }
+
+        stage('16. Terraform Plan') {
+            when { branch 'lab08' }
+            steps {
+                dir('infra/terraform') {
+                    sh 'docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 init -input=false -reconfigure'
+                    sh 'docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 plan -input=false -out=tfplan'
+                    sh 'docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 show -no-color tfplan > plan-summary.txt'
+                }
+            }
+            post {
+                always {
+                    dir('infra/terraform') {
+                        archiveArtifacts artifacts: 'tfplan, plan-summary.txt', allowEmptyArchive: true
+                    }
+                }
+            }
+        }
+
+        stage('17. Approve Terraform Apply') {
+            when { branch 'lab08' }
+            steps {
+                sh 'cat infra/terraform/plan-summary.txt'
+                input message: 'Review the plan summary in this build log, then approve the Lab 08 apply.'
+            }
+        }
+
+        stage('18. Terraform Apply') {
+            when { branch 'lab08' }
+            steps {
+                dir('infra/terraform') {
+                    sh 'docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 apply -input=false -auto-approve tfplan'
+                }
+                script {
+                    def instanceIp = sh(
+                        script: 'docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 output -raw instance_ip',
+                        returnStdout: true
+                    ).trim()
+                    env.LOCALSTACK_INSTANCE_ID = sh(
+                        script: 'docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 output -raw instance_id',
+                        returnStdout: true
+                    ).trim()
+                    def sshPort = sh(
+                        script: 'docker port localstack-ec2.$LOCALSTACK_INSTANCE_ID 22/tcp | head -n 1 | rev | cut -d: -f1 | rev',
+                        returnStdout: true
+                    ).trim()
+
+                    writeFile file: 'infra/ansible/inventory.ini', text: """[taskflow]
+host.docker.internal ansible_port=${sshPort} ansible_user=root ansible_ssh_private_key_file=/work/.lab08/taskflow-api ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+"""
+                    echo "Terraform provisioned the Lab 08 host at ${instanceIp}"
+                }
+            }
+        }
+
+        stage('19. Configure Host with Ansible') {
+            when { branch 'lab08' }
+            steps {
+                sh 'docker run --rm --add-host=host.docker.internal:host-gateway -v "$WORKSPACE:/work" -w /work --entrypoint ansible cytopia/ansible-lint:latest all -i infra/ansible/inventory.ini -m wait_for_connection -a timeout=180'
+                sh "docker run --rm --add-host=host.docker.internal:host-gateway -v \"${env.WORKSPACE}:/work\" -w /work --entrypoint ansible-playbook cytopia/ansible-lint:latest -i infra/ansible/inventory.ini infra/ansible/playbook.yml --extra-vars 'taskflow_image=localhost:5001/${APP_NAME}:${env.IMAGE_TAG}'"
+            }
+        }
+
+        stage('20. Destroy Lab 08 Infrastructure') {
+            when { branch 'lab08' }
+            steps {
+                input message: 'After saving the plan and apply evidence, approve Terraform destroy to leave no lab resources running.'
+                dir('infra/terraform') {
+                    sh 'docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 destroy -input=false -auto-approve'
+                    sh 'test -z "$(docker run --rm -v "$WORKSPACE/infra/terraform:/work" -w /work -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 state list)"'
+                }
+            }
+        }
+
+        // --- 16. DEPLOY STAGING (Lab 04 + Lab 07 - Blue/Green) ---
+        stage('21. Deploy Staging (Blue/Green)') {
             when {
                 branch 'develop'
             }
@@ -205,7 +341,6 @@ pipeline {
                 script {
                     echo "Deploying to Staging Environment..."
 
-                    // --- เก็บสถานะก่อนสวิตช์ ---
                     sh "kubectl get svc taskflow -o yaml > svc-before-${BUILD_NUMBER}.yaml"
 
                     def current = sh(script: "kubectl get svc taskflow -o jsonpath='{.spec.selector.color}'", returnStdout: true).trim()
@@ -229,10 +364,8 @@ pipeline {
                     sh "kubectl run smoke-${BUILD_NUMBER} --rm -i --restart=Never --image=curlimages/curl:8.12.1 --image-pull-policy=IfNotPresent -- curl -fsS http://taskflow-${next}:3000/"
                     sh "kubectl set selector service/taskflow app=taskflow-api,color=${next}"
 
-                    // --- เก็บสถานะหลังสวิตช์ ---
                     sh "kubectl get svc taskflow -o yaml > svc-after-${BUILD_NUMBER}.yaml"
 
-                    // --- สร้าง diff ให้เห็นชัดๆ ---
                     sh "diff svc-before-${BUILD_NUMBER}.yaml svc-after-${BUILD_NUMBER}.yaml > svc-diff-${BUILD_NUMBER}.txt || true"
                     sh "cat svc-diff-${BUILD_NUMBER}.txt"
 
@@ -262,8 +395,8 @@ pipeline {
             }
         }
 
-        // --- 13. DEPLOY PRODUCTION (Lab 04 + Lab 07 - Blue/Green + Approval Gate) ---
-        stage('13. Deploy Production (Blue/Green)') {
+        // --- 17. DEPLOY PRODUCTION (Lab 04 + Lab 07 - Blue/Green + Approval Gate) ---
+        stage('22. Deploy Production (Blue/Green)') {
             when {
                 branch 'main'
             }
@@ -274,20 +407,16 @@ pipeline {
                     def current = sh(script: "kubectl get svc taskflow -o jsonpath='{.spec.selector.color}'", returnStdout: true).trim()
                     def next = (current == 'blue') ? 'green' : 'blue'
                     
-                    // บันทึกสีเดิมไว้ใน env เพื่อใช้ตอนทำ Rollback
                     env.DEPLOY_PREVIOUS_COLOR = current
                     env.DEPLOY_NEXT_COLOR = next
                     
                     echo "Current Color: ${current} -> Target Color: ${next}"
 
-                    // 1. อัปเดต Image ฝั่งใหม่
                     sh "kubectl set image deployment/taskflow-${next} taskflow-api=${K8S_REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}"
                     sh "kubectl rollout status deployment/taskflow-${next} --timeout=180s"
                     
-                    // 2. Smoke Test (ตรงนี้ถ้าพัง จะดิ่งไปที่ post.failure ทันที)
                     sh "kubectl run smoke-${BUILD_NUMBER} --rm -i --restart=Never --image=curlimages/curl:8.12.1 --image-pull-policy=IfNotPresent -- curl -fsS http://taskflow-${next}:3000/"
                     
-                    // 3. ถ้า Smoke Test ผ่าน จะทำการสลับ Traffic ไปสีใหม่
                     sh "kubectl set selector service/taskflow app=taskflow-api,color=${next}"
                     echo "Production: Switched traffic from ${current} to ${next}"
                 }
@@ -298,7 +427,6 @@ pipeline {
                         echo "--------------------------------------------------"
                         echo "Deploy Failed! Initiating Automatic Rollback..."
                         
-                        // ตรวจสอบว่ามีสีเดิมบันทึกไว้หรือไม่
                         if (env.DEPLOY_PREVIOUS_COLOR) {
                             echo "Forcing traffic back to previous color: ${env.DEPLOY_PREVIOUS_COLOR}"
                             sh "kubectl set selector service/taskflow app=taskflow-api,color=${env.DEPLOY_PREVIOUS_COLOR}"
@@ -308,6 +436,15 @@ pipeline {
                         }
                         echo "--------------------------------------------------"
                     }
+                }
+            }
+        }
+    }
+    post {
+        always {
+            script {
+                if (env.BRANCH_NAME == 'lab08') {
+                    sh 'rm -rf .lab08'
                 }
             }
         }
