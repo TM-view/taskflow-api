@@ -284,7 +284,7 @@ pipeline {
                 input message: 'Review the plan summary in this build log, then approve the Lab 08 apply.'
             }
         }
-
+        
         stage('18. Terraform Apply') {
             when { branch 'lab08' }
             steps {
@@ -296,18 +296,27 @@ pipeline {
                         script: 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 output -raw instance_ip',
                         returnStdout: true
                     ).trim()
+
                     env.LOCALSTACK_INSTANCE_ID = sh(
                         script: 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 output -raw instance_id',
                         returnStdout: true
                     ).trim()
+
                     def sshPort = sh(
                         script: 'docker port localstack-ec2.$LOCALSTACK_INSTANCE_ID 22/tcp | head -n 1 | rev | cut -d: -f1 | rev',
                         returnStdout: true
                     ).trim()
 
+                    if (!sshPort) {
+                        error "Could not determine SSH port for localstack-ec2.${env.LOCALSTACK_INSTANCE_ID}"
+                    }
+
+                    echo "Detected SSH port: ${sshPort}"
+
                     writeFile file: 'infra/ansible/inventory.ini', text: """[taskflow]
-host.docker.internal ansible_port=${sshPort} ansible_user=root ansible_ssh_private_key_file=${env.WORKSPACE}/.lab08/taskflow-api ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
-"""
+        host.docker.internal ansible_port=${sshPort} ansible_user=root ansible_ssh_private_key_file=${env.WORKSPACE}/.lab08/taskflow-api ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+        """
+
                     echo "Terraform provisioned the Lab 08 host at ${instanceIp}"
                 }
             }
