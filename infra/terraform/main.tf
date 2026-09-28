@@ -89,7 +89,7 @@ resource "aws_instance" "taskflow_server" {
     volume_type = "gp2"
     encrypted   = true # เปิด Encryption ให้ดิสก์ตาม security baseline
   }
-  
+
   tags = {
     Name = "Taskflow-API-Host"
   }
