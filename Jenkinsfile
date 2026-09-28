@@ -253,10 +253,10 @@ pipeline {
                     ami_id=$(docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
                         amazon/aws-cli:latest --endpoint-url "$LOCALSTACK_ENDPOINT" \
                         ec2 describe-images \
-                        --filters 'Name=image-id,Values=ami-61ad6e59d7b0' 'Name=tag:ec2_vm_manager,Values=docker' \
+                        --filters 'Name=image-id,Values=ami-7f4c2a91' 'Name=tag:ec2_vm_manager,Values=docker' \
                         --query 'Images[0].ImageId' --output text)
-                    if [ "$ami_id" != "ami-61ad6e59d7b0" ]; then
-                        echo "Required LocalStack Docker-backed AMI ami-61ad6e59d7b0 is not registered. Check the LocalStack EC2 Docker VM manager and Docker socket." >&2
+                    if [ "$ami_id" != "ami-7f4c2a91" ]; then
+                        echo "LocalStack does not expose Docker-backed AMI ami-7f4c2a91. EC2 Docker VM emulation requires a LocalStack plan that includes EC2 (Hobby, Base, or Ultimate), EC2_VM_MANAGER=docker, the Docker socket, and image tag localstack-ec2/taskflow-ubuntu:ami-7f4c2a91. Activate an eligible plan, then restart LocalStack and retry." >&2
                         exit 1
                     fi
 
