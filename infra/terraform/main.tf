@@ -72,7 +72,7 @@ resource "aws_default_security_group" "taskflow_sg" {
 resource "aws_instance" "taskflow_server" {
   #checkov:skip=CKV_AWS_88:LocalStack instance must be reachable by Jenkins for this lab
   #checkov:skip=CKV2_AWS_41:This LocalStack demo does not call AWS APIs from the instance
-  ami                         = "ami-61ad6e59d7b0"
+  ami                         = "ami-04c6b54cfad330feb"
   instance_type               = "t3.nano"
   key_name                    = aws_key_pair.taskflow.key_name
   associate_public_ip_address = true
