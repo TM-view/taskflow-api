@@ -303,7 +303,23 @@ pipeline {
                     ).trim()
 
                     def sshPort = sh(
-                        script: 'docker port localstack-ec2.$LOCALSTACK_INSTANCE_ID 22/tcp | head -n 1 | rev | cut -d: -f1 | rev',
+                        script: '''
+                            container="localstack-ec2.$LOCALSTACK_INSTANCE_ID"
+                            ssh_port=""
+                            for attempt in $(seq 1 60); do
+                                ssh_port=$(docker port "$container" 22/tcp 2>/dev/null | head -n 1 | sed 's/.*://')
+                                if [ -n "$ssh_port" ]; then
+                                    printf '%s' "$ssh_port"
+                                    exit 0
+                                fi
+                                sleep 2
+                            done
+
+                            echo "Timed out waiting for SSH port mapping on $container." >&2
+                            echo "Matching LocalStack EC2 containers:" >&2
+                            docker ps -a --filter 'name=localstack-ec2' --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' >&2
+                            exit 1
+                        ''',
                         returnStdout: true
                     ).trim()
 
