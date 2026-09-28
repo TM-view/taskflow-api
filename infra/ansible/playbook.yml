@@ -2,9 +2,20 @@
 - name: Configure Taskflow API Host
   hosts: all
   become: true
+  gather_facts: false
   vars:
     ansible_python_interpreter: /usr/bin/python3
   tasks:
+    - name: Bootstrap Python for Ansible modules
+      ansible.builtin.raw: |
+        if ! command -v python3 >/dev/null 2>&1; then
+          apt-get update && apt-get install -y python3 && echo PYTHON_INSTALLED
+        else
+          echo PYTHON_PRESENT
+        fi
+      register: python_bootstrap
+      changed_when: "'PYTHON_INSTALLED' in python_bootstrap.stdout"
+
     - name: Install Node.js and Docker CLI
       ansible.builtin.apt:
         name:

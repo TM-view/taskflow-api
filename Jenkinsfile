@@ -244,10 +244,20 @@ pipeline {
             }
         }
 
-        stage('15. Prepare LocalStack State Bucket') {
+        stage('15. Validate LocalStack AMI and Prepare State Bucket') {
             when { branch 'lab08' }
             steps {
                 sh '''
+                    ami_id=$(docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
+                        amazon/aws-cli:latest --endpoint-url "$LOCALSTACK_ENDPOINT" \
+                        ec2 describe-images \
+                        --filters 'Name=image-id,Values=ami-61ad6e59d7b0' 'Name=tag:ec2_vm_manager,Values=docker' \
+                        --query 'Images[0].ImageId' --output text)
+                    if [ "$ami_id" != "ami-61ad6e59d7b0" ]; then
+                        echo "Required LocalStack Docker-backed AMI ami-61ad6e59d7b0 is not registered. Check the LocalStack EC2 Docker VM manager and Docker socket." >&2
+                        exit 1
+                    fi
+
                     if ! docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
                         amazon/aws-cli:latest --endpoint-url "$LOCALSTACK_ENDPOINT" \
                         s3api head-bucket --bucket taskflow-tfstate >/dev/null 2>&1; then
@@ -341,6 +351,21 @@ pipeline {
         stage('19. Configure Host with Ansible') {
             when { branch 'lab08' }
             steps {
+                sh '''
+                    for attempt in $(seq 1 60); do
+                        if docker run --rm --add-host=host.docker.internal:host-gateway --volumes-from jenkins \
+                            -w "$WORKSPACE" --entrypoint ansible cytopia/ansible-lint:latest all \
+                            -i infra/ansible/inventory.ini -m raw -a \
+                            'if command -v python3 >/dev/null 2>&1; then echo PYTHON_PRESENT; else apt-get update && apt-get install -y python3; fi' -o; then
+                            break
+                        fi
+                        if [ "$attempt" -eq 60 ]; then
+                            echo "Timed out waiting for SSH and Python bootstrap on the LocalStack EC2 host." >&2
+                            exit 1
+                        fi
+                        sleep 3
+                    done
+                '''
                 sh 'docker run --rm --add-host=host.docker.internal:host-gateway --volumes-from jenkins -w "$WORKSPACE" --entrypoint ansible cytopia/ansible-lint:latest all -i infra/ansible/inventory.ini -m wait_for_connection -a timeout=180'
                 sh "docker run --rm --add-host=host.docker.internal:host-gateway --volumes-from jenkins -w \"${env.WORKSPACE}\" --entrypoint ansible-playbook cytopia/ansible-lint:latest -i infra/ansible/inventory.ini infra/ansible/playbook.yml --extra-vars 'taskflow_image=localhost:5001/${APP_NAME}:${env.IMAGE_TAG}'"
             }

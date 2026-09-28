@@ -73,7 +73,9 @@ resource "aws_instance" "taskflow_server" {
   #checkov:skip=CKV_AWS_88:LocalStack instance must be reachable by Jenkins for this lab
   #checkov:skip=CKV2_AWS_41:This LocalStack demo does not call AWS APIs from the instance
   #checkov:skip=CKV_AWS_126:LocalStack does not implement EC2 detailed monitoring (MonitorInstances)
-  ami                         = "ami-04c6b54cfad330feb"
+  # Use LocalStack's built-in Docker-backed Ubuntu AMI so RunInstances creates
+  # a localstack-ec2 container with an SSH port mapping for Ansible.
+  ami                         = "ami-61ad6e59d7b0"
   instance_type               = "t3.nano"
   key_name                    = aws_key_pair.taskflow.key_name
   associate_public_ip_address = true
