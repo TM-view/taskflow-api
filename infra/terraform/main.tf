@@ -76,7 +76,7 @@ resource "aws_instance" "taskflow_server" {
   instance_type               = "t3.nano"
   key_name                    = aws_key_pair.taskflow.key_name
   associate_public_ip_address = true
-  monitoring                  = true
+  monitoring                  = false
   ebs_optimized               = true
   vpc_security_group_ids      = [aws_default_security_group.taskflow_sg.id]
 
