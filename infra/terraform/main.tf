@@ -92,14 +92,10 @@ resource "docker_image" "taskflow_host" {
   build {
     context    = "${path.module}/../ansible"
     dockerfile = "Dockerfile.host"
-    build_args = {
-      SSH_PUBLIC_KEY = var.ssh_public_key
-    }
   }
 
   triggers = {
-    dockerfile  = filesha256("${path.module}/../ansible/Dockerfile.host")
-    ssh_key_sha = sha256(var.ssh_public_key)
+    dockerfile = filesha256("${path.module}/../ansible/Dockerfile.host")
   }
 }
 
@@ -113,6 +109,12 @@ resource "docker_container" "taskflow_host" {
 
   ports {
     internal = 8080
+  }
+
+  upload {
+    file        = "/root/.ssh/authorized_keys"
+    content     = var.ssh_public_key
+    permissions = "0600"
   }
 
   # The host runs Docker CLI commands against the same engine Jenkins uses.
