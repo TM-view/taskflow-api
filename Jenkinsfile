@@ -23,6 +23,11 @@ pipeline {
             defaultValue: false,
             description: 'On develop only, deploy a missing image to test rollout failure and automatic rollback'
         )
+        booleanParam(
+            name: 'REPLACE_LOCALSTACK_INSTANCE',
+            defaultValue: false,
+            description: 'On lab08 only, replace the existing EC2 instance once (use after fixing Docker-backed AMI registration)'
+        )
     }
     stages {
         stage('0. Validate Rollout Test Mode') {
@@ -297,7 +302,10 @@ pipeline {
             steps {
                 dir('infra/terraform') {
                     sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 init -input=false -reconfigure'
-                    sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 plan -input=false -out=tfplan'
+                    script {
+                        def replacementArg = params.REPLACE_LOCALSTACK_INSTANCE ? '-replace=aws_instance.taskflow_server' : ''
+                        sh "docker run --rm --volumes-from jenkins -w \"\$WORKSPACE/infra/terraform\" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 plan -input=false ${replacementArg} -out=tfplan"
+                    }
                     sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 show -no-color tfplan > plan-summary.txt'
                 }
             }
