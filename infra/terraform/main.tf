@@ -56,7 +56,7 @@ resource "aws_default_vpc" "default" {
 }
 
 # LocalStack's mock EC2 records this lab security group. Docker port publishing
-# below provides the reachable SSH/8080 ports for the emulated host.
+# below provides SSH and a dynamically assigned host port for container port 8080.
 resource "aws_default_security_group" "taskflow_sg" {
   vpc_id = aws_default_vpc.default.id
 
@@ -113,7 +113,6 @@ resource "docker_container" "taskflow_host" {
 
   ports {
     internal = 8080
-    external = 8080
   }
 
   # The host runs Docker CLI commands against the same engine Jenkins uses.
@@ -138,6 +137,11 @@ output "ansible_host" {
 output "ansible_port" {
   value       = one([for port in docker_container.taskflow_host.ports : port.external if port.internal == 22])
   description = "Dynamically published SSH port for the Ansible host"
+}
+
+output "application_port" {
+  value       = one([for port in docker_container.taskflow_host.ports : port.external if port.internal == 8080])
+  description = "Dynamically published host port for container port 8080"
 }
 
 
