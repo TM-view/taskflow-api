@@ -16,6 +16,7 @@ pipeline {
     }
     options {
         timeout(time: 30, unit: 'MINUTES')
+        disableConcurrentBuilds()
     }
     parameters {
         booleanParam(
@@ -26,7 +27,7 @@ pipeline {
         booleanParam(
             name: 'REPLACE_LOCALSTACK_INSTANCE',
             defaultValue: false,
-            description: 'On lab08 only, replace the existing EC2 instance once (use after fixing Docker-backed AMI registration)'
+            description: 'On lab08 only, replace the Terraform-managed Docker SSH host once'
         )
     }
     stages {
@@ -277,13 +278,17 @@ pipeline {
             }
         }
 
-        stage('15. Validate LocalStack AMI and Prepare State Bucket') {
+        stage('15. Validate Docker Host and Prepare Remote State') {
             when { branch 'lab08' }
             steps {
                 sh '''
-                    if ! docker image inspect localstack-ec2/taskflow-ubuntu:ami-7f4c2a91 >/dev/null 2>&1; then
-                        echo "Required Docker image localstack-ec2/taskflow-ubuntu:ami-7f4c2a91 is not available to the Docker daemon used by Jenkins/LocalStack." >&2
+                    if ! docker info >/dev/null 2>&1; then
+                        echo "Jenkins cannot reach the Docker engine required to provision the Lab 08 host." >&2
                         exit 1
+                    fi
+
+                    if ! docker image inspect ubuntu:22.04 >/dev/null 2>&1; then
+                        docker pull ubuntu:22.04
                     fi
 
                     if ! docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
@@ -292,6 +297,36 @@ pipeline {
                         docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
                             amazon/aws-cli:latest --endpoint-url "$LOCALSTACK_ENDPOINT" \
                             s3api create-bucket --bucket taskflow-tfstate
+                    fi
+
+                    docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
+                        amazon/aws-cli:latest --endpoint-url "$LOCALSTACK_ENDPOINT" \
+                        s3api put-bucket-versioning --bucket taskflow-tfstate \
+                        --versioning-configuration Status=Enabled
+
+                    versioning=$(docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
+                        amazon/aws-cli:latest --endpoint-url "$LOCALSTACK_ENDPOINT" \
+                        s3api get-bucket-versioning --bucket taskflow-tfstate \
+                        --query Status --output text)
+                    if [ "$versioning" != Enabled ]; then
+                        echo "Remote state bucket versioning is not enabled." >&2
+                        exit 1
+                    fi
+
+                    state_key=lab/terraform.tfstate
+                    legacy_state_key=taskflow/lab08/terraform.tfstate
+                    if ! docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
+                        amazon/aws-cli:latest --endpoint-url "$LOCALSTACK_ENDPOINT" \
+                        s3api head-object --bucket taskflow-tfstate --key "$state_key" >/dev/null 2>&1; then
+                        if docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
+                            amazon/aws-cli:latest --endpoint-url "$LOCALSTACK_ENDPOINT" \
+                            s3api head-object --bucket taskflow-tfstate --key "$legacy_state_key" >/dev/null 2>&1; then
+                            echo "Migrating existing Terraform state to s3://taskflow-tfstate/$state_key"
+                            docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
+                                amazon/aws-cli:latest --endpoint-url "$LOCALSTACK_ENDPOINT" \
+                                s3api copy-object --bucket taskflow-tfstate --key "$state_key" \
+                                --copy-source "taskflow-tfstate/$legacy_state_key"
+                        fi
                     fi
                 '''
             }
@@ -303,7 +338,7 @@ pipeline {
                 dir('infra/terraform') {
                     sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 init -input=false -reconfigure'
                     script {
-                        def replacementArg = params.REPLACE_LOCALSTACK_INSTANCE ? '-replace=aws_instance.taskflow_server' : ''
+                        def replacementArg = params.REPLACE_LOCALSTACK_INSTANCE ? '-replace=docker_container.taskflow_host' : ''
                         sh "docker run --rm --volumes-from jenkins -w \"\$WORKSPACE/infra/terraform\" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 plan -input=false ${replacementArg} -out=tfplan"
                     }
                     sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 show -no-color tfplan > plan-summary.txt'
@@ -338,40 +373,24 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    env.LOCALSTACK_INSTANCE_ID = sh(
-                        script: 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 output -raw instance_id',
+                    def ansibleHost = sh(
+                        script: 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 output -raw ansible_host',
                         returnStdout: true
                     ).trim()
 
                     def sshPort = sh(
-                        script: '''
-                            container="localstack-ec2.$LOCALSTACK_INSTANCE_ID"
-                            ssh_port=""
-                            for attempt in $(seq 1 60); do
-                                ssh_port=$(docker port "$container" 22/tcp 2>/dev/null | head -n 1 | sed 's/.*://')
-                                if [ -n "$ssh_port" ]; then
-                                    printf '%s' "$ssh_port"
-                                    exit 0
-                                fi
-                                sleep 2
-                            done
-
-                            echo "Timed out waiting for SSH port mapping on $container." >&2
-                            echo "Matching LocalStack EC2 containers:" >&2
-                            docker ps -a --filter 'name=localstack-ec2' --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' >&2
-                            exit 1
-                        ''',
+                        script: 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 output -raw ansible_port',
                         returnStdout: true
                     ).trim()
 
                     if (!sshPort) {
-                        error "Could not determine SSH port for localstack-ec2.${env.LOCALSTACK_INSTANCE_ID}"
+                        error "Terraform did not return the SSH port for the Lab 08 Docker host."
                     }
 
                     echo "Detected SSH port: ${sshPort}"
 
                     writeFile file: 'infra/ansible/inventory.ini', text: """[taskflow]
-        host.docker.internal ansible_port=${sshPort} ansible_user=root ansible_ssh_private_key_file=${env.WORKSPACE}/.lab08/taskflow-api ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+        ${ansibleHost} ansible_port=${sshPort} ansible_user=root ansible_ssh_private_key_file=${env.WORKSPACE}/.lab08/taskflow-api ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
         """
 
                     echo "Terraform provisioned the Lab 08 host at ${instanceIp}"
@@ -391,7 +410,7 @@ pipeline {
                             break
                         fi
                         if [ "$attempt" -eq 60 ]; then
-                            echo "Timed out waiting for SSH and Python bootstrap on the LocalStack EC2 host." >&2
+                            echo "Timed out waiting for SSH and Python bootstrap on the Terraform-managed Docker host." >&2
                             exit 1
                         fi
                         sleep 3
@@ -410,6 +429,11 @@ pipeline {
                     sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 destroy -input=false -auto-approve'
                     sh 'test -z "$(docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 state list)"'
                 }
+                sh '''
+                    docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
+                        amazon/aws-cli:latest --endpoint-url "$LOCALSTACK_ENDPOINT" \
+                        s3api delete-object --bucket taskflow-tfstate --key taskflow/lab08/terraform.tfstate
+                '''
             }
         }
 

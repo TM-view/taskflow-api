@@ -1,21 +1,30 @@
 terraform {
-  required_version = ">= 1.0.0"
+  required_version = ">= 1.10.0"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    docker = {
+      source  = "kreuzwerker/docker"
+      version = "~> 3.6.1"
+    }
   }
-  # กำหนด S3 / LocalStack backend สำหรับ Remote State
+  # Keep Terraform state in LocalStack S3, with object versioning and S3 locking.
   backend "s3" {
-    bucket                      = "taskflow-tfstate"
-    key                         = "taskflow/lab08/terraform.tfstate"
-    region                      = "us-east-1"
-    endpoint                    = "http://host.docker.internal:4566"
+    bucket         = "taskflow-tfstate"
+    key            = "lab/terraform.tfstate"
+    region         = "us-east-1"
+    use_lockfile   = true
+    use_path_style = true
+
+    endpoints = {
+      s3 = "http://host.docker.internal:4566"
+    }
+
     skip_credentials_validation = true
     skip_metadata_api_check     = true
     skip_requesting_account_id  = true
-    force_path_style            = true
   }
 }
 
@@ -34,13 +43,20 @@ provider "aws" {
   }
 }
 
+# Freemium LocalStack supports EC2 API records but not Docker-backed EC2 hosts.
+# Terraform therefore creates the SSH-capable lab host through the mounted Docker engine.
+provider "docker" {
+  host = "unix:///var/run/docker.sock"
+}
+
 #tfsec:ignore:aws-ec2-no-default-vpc: LocalStack EC2 Docker Manager uses its default VPC
 #tfsec:ignore:aws-ec2-require-vpc-flow-logs-for-all-vpcs: LocalStack does not emulate flow logs
 resource "aws_default_vpc" "default" {
   #checkov:skip=CKV_AWS_148:LocalStack EC2 Docker Manager requires its default VPC
 }
 
-# Security Group อนุญาตเฉพาะ Port 8080 (แก้ปัญหา Open Security Group ตาม Audit)
+# LocalStack's mock EC2 records this lab security group. Docker port publishing
+# below provides the reachable SSH/8080 ports for the emulated host.
 resource "aws_default_security_group" "taskflow_sg" {
   vpc_id = aws_default_vpc.default.id
 
@@ -69,48 +85,61 @@ resource "aws_default_security_group" "taskflow_sg" {
   }
 }
 
-#tfsec:ignore:aws-ec2-enable-at-rest-encryption:LocalStack Docker-backed EC2 has no EBS volume encryption; root_block_device triggers an unavailable AMI DescribeImages lookup
-resource "aws_instance" "taskflow_server" {
-  #checkov:skip=CKV_AWS_88:LocalStack instance must be reachable by Jenkins for this lab
-  #checkov:skip=CKV2_AWS_41:This LocalStack demo does not call AWS APIs from the instance
-  #checkov:skip=CKV_AWS_126:LocalStack does not implement EC2 detailed monitoring (MonitorInstances)
-  #checkov:skip=CKV_AWS_8:LocalStack Docker-backed EC2 does not expose EBS root-volume encryption
-  # This image is tagged in Docker as localstack-ec2/taskflow-ubuntu:ami-7f4c2a91.
-  ami                         = "ami-7f4c2a91"
-  instance_type               = "t3.nano"
-  key_name                    = aws_key_pair.taskflow.key_name
-  associate_public_ip_address = true
-  monitoring                  = false
-  ebs_optimized               = true
-  vpc_security_group_ids      = [aws_default_security_group.taskflow_sg.id]
+resource "docker_image" "taskflow_host" {
+  name         = "taskflow-lab08-host:latest"
+  keep_locally = false
 
-  metadata_options {
-    http_tokens = "required" # ป้องกัน IMDSv1 ตามข้อเสนอแนะของ tfsec
+  build {
+    context    = "${path.module}/../ansible"
+    dockerfile = "Dockerfile.host"
+    build_args = {
+      SSH_PUBLIC_KEY = var.ssh_public_key
+    }
   }
 
-  # Do not set root_block_device for this Docker-backed LocalStack AMI.
-  # The AWS provider resolves the AMI root device name with DescribeImages,
-  # but LocalStack does not expose this custom Docker AMI through that API.
-
-  tags = {
-    Name = "Taskflow-API-Host"
+  triggers = {
+    dockerfile  = filesha256("${path.module}/../ansible/Dockerfile.host")
+    ssh_key_sha = sha256(var.ssh_public_key)
   }
+}
+
+resource "docker_container" "taskflow_host" {
+  name  = "taskflow-lab08-host"
+  image = docker_image.taskflow_host.image_id
+
+  ports {
+    internal = 22
+  }
+
+  ports {
+    internal = 8080
+    external = 8080
+  }
+
+  # The host runs Docker CLI commands against the same engine Jenkins uses.
+  volumes {
+    host_path      = "/var/run/docker.sock"
+    container_path = "/var/run/docker.sock"
+  }
+
 }
 
 output "instance_ip" {
-  value       = aws_instance.taskflow_server.public_ip
-  description = "The public IP address of the provisioned server"
+  value       = "host.docker.internal"
+  description = "The Docker host address used to reach the Terraform-managed Lab 08 host"
 }
 
-output "instance_id" {
-  value       = aws_instance.taskflow_server.id
-  description = "The LocalStack EC2 Docker container identifier"
+
+output "ansible_host" {
+  value       = "host.docker.internal"
+  description = "Host name reachable from Jenkins containers"
 }
 
-resource "aws_key_pair" "taskflow" {
-  key_name   = "taskflow-lab08"
-  public_key = var.ssh_public_key
+output "ansible_port" {
+  value       = one([for port in docker_container.taskflow_host.ports : port.external if port.internal == 22])
+  description = "Dynamically published SSH port for the Ansible host"
 }
+
 
 variable "ssh_public_key" {
   type        = string

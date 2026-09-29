@@ -23,14 +23,9 @@
           - docker.io
         state: present
         update_cache: true
+        policy_rc_d: 101
 
-    - name: Ensure Docker service is running
-      ansible.builtin.service:
-        name: docker
-        state: stopped
-        enabled: false
-
-    - name: Verify Docker can reach its daemon
+    - name: Verify Docker CLI can reach the shared Docker daemon
       ansible.builtin.command: docker info
       changed_when: false
 
