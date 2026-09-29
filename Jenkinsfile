@@ -404,7 +404,7 @@ pipeline {
                 sh '''
                     for attempt in $(seq 1 60); do
                         if docker run --rm --add-host=host.docker.internal:host-gateway --volumes-from jenkins \
-                            -w "$WORKSPACE" --entrypoint ansible cytopia/ansible-lint:latest all \
+                            -w "$WORKSPACE" --entrypoint ansible cytopia/ansible:latest-tools all \
                             -i infra/ansible/inventory.ini -m raw -a \
                             'if command -v python3 >/dev/null 2>&1; then echo PYTHON_PRESENT; else apt-get update && apt-get install -y python3; fi' -o; then
                             break
@@ -416,8 +416,8 @@ pipeline {
                         sleep 3
                     done
                 '''
-                sh 'docker run --rm --add-host=host.docker.internal:host-gateway --volumes-from jenkins -w "$WORKSPACE" --entrypoint ansible cytopia/ansible-lint:latest all -i infra/ansible/inventory.ini -m wait_for_connection -a timeout=180'
-                sh "docker run --rm --add-host=host.docker.internal:host-gateway --volumes-from jenkins -w \"${env.WORKSPACE}\" --entrypoint ansible-playbook cytopia/ansible-lint:latest -i infra/ansible/inventory.ini infra/ansible/playbook.yml --extra-vars 'taskflow_image=${REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}'"
+                sh 'docker run --rm --add-host=host.docker.internal:host-gateway --volumes-from jenkins -w "$WORKSPACE" --entrypoint ansible cytopia/ansible:latest-tools all -i infra/ansible/inventory.ini -m wait_for_connection -a timeout=180'
+                sh "docker run --rm --add-host=host.docker.internal:host-gateway --volumes-from jenkins -w \"${env.WORKSPACE}\" --entrypoint ansible-playbook cytopia/ansible:latest-tools -i infra/ansible/inventory.ini infra/ansible/playbook.yml --extra-vars 'taskflow_image=${REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}'"
             }
         }
 
