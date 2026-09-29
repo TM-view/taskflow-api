@@ -6,7 +6,7 @@ pipeline {
     environment {
         APP_NAME = 'taskflow-api'
         NODE_ENV = 'test'
-        REGISTRY = 'localhost:5001'
+        REGISTRY = '127.0.0.1:5001'
         K8S_REGISTRY = 'registry:5000'
         KUBECONFIG = '/var/jenkins_home/.kube/config'
         LOCALSTACK_ENDPOINT = 'http://host.docker.internal:4566'
@@ -364,7 +364,7 @@ pipeline {
                     done
                 '''
                 sh 'docker run --rm --add-host=host.docker.internal:host-gateway --volumes-from jenkins -w "$WORKSPACE" --entrypoint ansible cytopia/ansible-lint:latest all -i infra/ansible/inventory.ini -m wait_for_connection -a timeout=180'
-                sh "docker run --rm --add-host=host.docker.internal:host-gateway --volumes-from jenkins -w \"${env.WORKSPACE}\" --entrypoint ansible-playbook cytopia/ansible-lint:latest -i infra/ansible/inventory.ini infra/ansible/playbook.yml --extra-vars 'taskflow_image=localhost:5001/${APP_NAME}:${env.IMAGE_TAG}'"
+                sh "docker run --rm --add-host=host.docker.internal:host-gateway --volumes-from jenkins -w \"${env.WORKSPACE}\" --entrypoint ansible-playbook cytopia/ansible-lint:latest -i infra/ansible/inventory.ini infra/ansible/playbook.yml --extra-vars 'taskflow_image=${REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}'"
             }
         }
 
