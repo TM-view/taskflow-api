@@ -180,7 +180,33 @@ pipeline {
                         echo "Building Docker Image with tag: ${env.IMAGE_TAG}"
                         sh "docker build -t ${REGISTRY}/${APP_NAME}:${env.IMAGE_TAG} ."
                         sh "docker push ${REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}"
-                        sh "docker exec taskflow-cluster-control-plane ctr -n k8s.io images pull --plain-http ${K8S_REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}"
+                        sh """
+                            set -eu
+                            node=taskflow-cluster-control-plane
+                            if ! docker inspect "\$node" >/dev/null 2>&1; then
+                                echo "Required Kind node container '\$node' does not exist." >&2
+                                exit 1
+                            fi
+
+                            if [ "\$(docker inspect -f '{{.State.Running}}' "\$node")" != true ]; then
+                                echo "Starting stopped Kind node container '\$node'."
+                                docker start "\$node" >/dev/null
+                            fi
+
+                            for attempt in \$(seq 1 60); do
+                                if docker exec "\$node" ctr version >/dev/null 2>&1; then
+                                    break
+                                fi
+                                if [ "\$attempt" -eq 60 ]; then
+                                    echo "Timed out waiting for containerd in '\$node'." >&2
+                                    docker logs --tail 50 "\$node" >&2 || true
+                                    exit 1
+                                fi
+                                sleep 2
+                            done
+
+                            docker exec "\$node" ctr -n k8s.io images pull --plain-http ${K8S_REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}
+                        """
                     }
                 }
             }
