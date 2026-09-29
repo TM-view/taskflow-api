@@ -69,6 +69,7 @@ resource "aws_default_security_group" "taskflow_sg" {
   }
 }
 
+#tfsec:ignore:aws-ec2-enable-at-rest-encryption:LocalStack Docker-backed EC2 has no EBS volume encryption; root_block_device triggers an unavailable AMI DescribeImages lookup
 resource "aws_instance" "taskflow_server" {
   #checkov:skip=CKV_AWS_88:LocalStack instance must be reachable by Jenkins for this lab
   #checkov:skip=CKV2_AWS_41:This LocalStack demo does not call AWS APIs from the instance
