@@ -73,6 +73,7 @@ resource "aws_instance" "taskflow_server" {
   #checkov:skip=CKV_AWS_88:LocalStack instance must be reachable by Jenkins for this lab
   #checkov:skip=CKV2_AWS_41:This LocalStack demo does not call AWS APIs from the instance
   #checkov:skip=CKV_AWS_126:LocalStack does not implement EC2 detailed monitoring (MonitorInstances)
+  #checkov:skip=CKV_AWS_8:LocalStack Docker-backed EC2 does not expose EBS root-volume encryption
   # This image is tagged in Docker as localstack-ec2/taskflow-ubuntu:ami-7f4c2a91.
   ami                         = "ami-7f4c2a91"
   instance_type               = "t3.nano"
@@ -86,11 +87,9 @@ resource "aws_instance" "taskflow_server" {
     http_tokens = "required" # ป้องกัน IMDSv1 ตามข้อเสนอแนะของ tfsec
   }
 
-  root_block_device {
-    volume_size = 15
-    volume_type = "gp2"
-    encrypted   = true # เปิด Encryption ให้ดิสก์ตาม security baseline
-  }
+  # Do not set root_block_device for this Docker-backed LocalStack AMI.
+  # The AWS provider resolves the AMI root device name with DescribeImages,
+  # but LocalStack does not expose this custom Docker AMI through that API.
 
   tags = {
     Name = "Taskflow-API-Host"
