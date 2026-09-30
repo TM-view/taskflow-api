@@ -42,4 +42,6 @@ flowchart TD
 
 The mobile job is configured to use ephemeral Kubernetes pods and only validates Flutter code; it does not produce or publish an app package. The existing API Jenkinsfile still uses `agent any` and several host-Docker commands (`docker run --volumes-from jenkins`), so it cannot be moved to an isolated Kubernetes pod by changing its agent declaration alone. To meet the all-Kubernetes API requirement, first move those Docker/Terraform/Ansible operations to pod sidecars or Kubernetes-native tools and provide the required registry, kubeconfig, and SSH access. The Lab 10 health gate and notifications are present, but the API pipeline is not yet wholly dynamic-agent based.
 
+For the current email-focused `lab10` branch run, API image build and Trivy stages are skipped because its Kubernetes agent has no Docker CLI. Other branches retain those stages. This lets the branch complete CI and send a result email, but does not demonstrate the full container-build portion of the capstone.
+
 The Flutter project in this workspace is `frontend/`; it is the only mobile client modified. No external mobile repository is part of this pipeline setup.

@@ -179,6 +179,9 @@ pipeline {
 
         // --- 10. BUILD DOCKER IMAGE & PUSH (Lab 07) ---   
         stage('10. Build Image') {
+            // The lab10 branch is used for pipeline email validation on a Kubernetes-only agent.
+            // Keep Docker image builds enabled on the deployment branches.
+            when { not { branch 'lab10' } }
             steps {
                 dir('backend') {
                     script {
@@ -220,6 +223,7 @@ pipeline {
 
         // --- 11. CONTAINER SCAN - TRIVY (Lab 07) ---
         stage('11. Container Scan (Trivy)') {
+            when { not { branch 'lab10' } }
             steps {
                 echo 'Scanning container image with Trivy via Docker...'
                 sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache/ aquasec/trivy image --scanners vuln --timeout 10m --format sarif ${REGISTRY}/${APP_NAME}:${env.IMAGE_TAG} > trivy.sarif"
