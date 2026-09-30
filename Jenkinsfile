@@ -150,15 +150,20 @@ spec:
                 stage('Secrets Detection') {
                     steps {
                         container('gitleaks') {
-                            sh 'gitleaks detect --source . --verbose --report-path gitleaks-report.json'
+                            sh '''
+                                echo "Testing Gitleaks failure..."
+                                exit 1
+                            '''
                         }
                     }
                     post {
-                        always { archiveArtifacts artifacts: 'gitleaks-report.json', allowEmptyArchive: true }
+                        always {
+                            archiveArtifacts artifacts: 'gitleaks-report.json',
+                                            allowEmptyArchive: true
+                        }
                     }
                 }
             }
-        }
 
         // --- 6. SONARQUBE ANALYSIS & QUALITY GATE (Lab 05) ---
         stage('6. SonarQube Analysis') {
