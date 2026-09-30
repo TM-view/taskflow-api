@@ -35,8 +35,8 @@ spec:
     command: ['cat']
     tty: true
     resources:
-      requests: {cpu: 100m, memory: 256Mi}
-      limits: {cpu: '1', memory: 1Gi}
+      requests: {cpu: 200m, memory: 512Mi}
+      limits: {cpu: '1', memory: 2Gi}
   - name: kubectl
     image: bitnamilegacy/kubectl:1.33
     command: ['cat']
