@@ -2,13 +2,14 @@ groups:
   - name: jenkins-slo
     interval: 30s
     rules:
-      # The Prometheus plugin exports build duration as a summary quantile.
+      # With per-build metrics enabled (168h age, max 20 builds/job), calculate
+      # the Lab 09 pipeline p95 directly from its retained build observations.
       - record: jenkins:build_duration_seconds:p95
-        expr: default_jenkins_builds_duration_milliseconds_summary{quantile="0.95"} / 1000
+        expr: quantile(0.95, default_jenkins_builds_build_duration_milliseconds{jenkins_job="taskflow-lab09"}) / 1000
 
       # SLO: p95 build duration stays below six minutes over the rolling week.
       - record: jenkins:build_duration_slo:met_7d
-        expr: (max_over_time(jenkins:build_duration_seconds:p95[7d]) < 360)
+        expr: max_over_time(jenkins:build_duration_seconds:p95[7d]) < bool 360
 
       # Queue persistence is a user-visible capacity symptom. The plugin's
       # queue gauge cannot measure elapsed wait for an individual item, so

@@ -39,3 +39,4 @@ volumes:
 networks:
   jenkins-net:
     external: true
+    name: kind
