@@ -77,7 +77,7 @@ spec:
                     steps {
                         dir('frontend') {
                             container('osv') {
-                                sh 'osv-scanner scan source -r .'
+                                sh '/osv-scanner scan source -r .'
                             }
                         }
                     }
