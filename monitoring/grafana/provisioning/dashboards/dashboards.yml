@@ -1,0 +1,10 @@
+apiVersion: 1
+providers:
+  - name: Jenkins Lab 09
+    orgId: 1
+    folder: Jenkins
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

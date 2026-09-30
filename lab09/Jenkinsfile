@@ -1,0 +1,91 @@
+pipeline {
+    agent {
+        kubernetes {
+            inheritFrom 'k8s-node'
+            defaultContainer 'node'
+            yaml '''
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: jenkins-agents
+spec:
+  serviceAccountName: jenkins
+  restartPolicy: Never
+  containers:
+  - name: node
+    image: node:20-alpine
+    command: ['cat']
+    tty: true
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: '1'
+        memory: 1Gi
+'''
+        }
+    }
+    options {
+        timeout(time: 20, unit: 'MINUTES')
+        timestamps()
+    }
+    parameters {
+        booleanParam(name: 'HOLD_AGENT', defaultValue: false,
+            description: 'Enable only while demonstrating queue saturation with concurrent builds')
+    }
+    stages {
+        stage('Agent Info') {
+            steps {
+                sh 'printf "Agent pod: %s\\n" "$HOSTNAME"; node --version; npm --version'
+            }
+        }
+        stage('Install') {
+            steps {
+                dir('backend') {
+                    sh 'npm ci --fetch-retries=5 --fetch-timeout=120000 --prefer-offline'
+                }
+            }
+        }
+        stage('Build') {
+            steps {
+                dir('backend') {
+                    sh 'npm run build'
+                }
+            }
+        }
+        stage('Unit Test') {
+            steps {
+                dir('backend') {
+                    sh 'npx jest --runInBand --coverage'
+                }
+            }
+            post {
+                always {
+                    dir('backend') {
+                        archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
+                    }
+                }
+            }
+        }
+        stage('SCA') {
+            steps {
+                dir('backend') {
+                    sh 'npm audit --audit-level=high'
+                }
+            }
+        }
+        // Keep the pod allocated only for the deliberate queue saturation exercise.
+        stage('Hold (load test only)') {
+            when { expression { params.HOLD_AGENT == true } }
+            steps {
+                input message: 'Resume to release this Kubernetes agent pod.'
+            }
+        }
+    }
+    post {
+        always {
+            echo 'This Kubernetes agent pod is ephemeral and will be deleted after the run.'
+        }
+    }
+}

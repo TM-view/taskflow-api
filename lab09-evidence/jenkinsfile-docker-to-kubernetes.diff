@@ -1,0 +1,23 @@
+--- Jenkinsfile (Lab 03 Docker agent)
++++ lab09/Jenkinsfile (Lab 09 Kubernetes agent)
+@@
+-    agent { docker { image 'node:20-alpine' } }
++    agent {
++        kubernetes {
++            inheritFrom 'k8s-node'
++            defaultContainer 'node'
++            yaml '''
++apiVersion: v1
++kind: Pod
++metadata:
++  namespace: jenkins-agents
++spec:
++  serviceAccountName: jenkins
++  containers:
++  - name: node
++    image: node:20-alpine
++    command: ['cat']
++    tty: true
++'''
++        }
++    }

@@ -1,0 +1,31 @@
+groups:
+  - name: jenkins-slo
+    interval: 30s
+    rules:
+      # The Prometheus plugin exports build duration as a summary quantile.
+      - record: jenkins:build_duration_seconds:p95
+        expr: default_jenkins_builds_duration_milliseconds_summary{quantile="0.95"} / 1000
+
+      # SLO: p95 build duration stays below six minutes over the rolling week.
+      - record: jenkins:build_duration_slo:met_7d
+        expr: (max_over_time(jenkins:build_duration_seconds:p95[7d]) < 360)
+
+      # Queue persistence is a user-visible capacity symptom. The plugin's
+      # queue gauge cannot measure elapsed wait for an individual item, so
+      # continuous non-empty queue is used as the documented proxy.
+      - alert: JenkinsQueueBacklog
+        expr: default_jenkins_executors_queue_length > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Jenkins build queue has remained non-empty for five minutes
+          description: The persistent queue indicates insufficient agent capacity.
+
+      - alert: JenkinsBuildDurationSLOBreach
+        expr: max_over_time(jenkins:build_duration_seconds:p95[7d]) >= 360
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Jenkins rolling seven-day p95 build duration is at least six minutes
