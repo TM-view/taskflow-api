@@ -1,0 +1,85 @@
+pipeline {
+    agent {
+        kubernetes {
+            defaultContainer 'flutter'
+            yaml '''
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: jenkins-agents
+spec:
+  serviceAccountName: jenkins
+  restartPolicy: Never
+  containers:
+  - name: flutter
+    image: ghcr.io/cirruslabs/flutter:3.44.0
+    command: ['cat']
+    tty: true
+    resources:
+      requests:
+        cpu: 500m
+        memory: 2Gi
+      limits:
+        cpu: '2'
+        memory: 4Gi
+  - name: osv
+    image: ghcr.io/google/osv-scanner:v2.2.2
+    command: ['cat']
+    tty: true
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+'''
+        }
+    }
+    options {
+        timeout(time: 45, unit: 'MINUTES')
+        timestamps()
+        disableConcurrentBuilds()
+    }
+    stages {
+        stage('Pub Get') {
+            steps {
+                sh 'flutter pub get --enforce-lockfile'
+            }
+        }
+        stage('Parallel Quality Gates') {
+            failFast true
+            parallel {
+                stage('Flutter Analyze') {
+                    steps { sh 'flutter analyze --fatal-infos' }
+                }
+                stage('Flutter Tests') {
+                    steps { sh 'flutter test --coverage' }
+                    post {
+                        always { archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true }
+                    }
+                }
+                stage('OSV Dependency Scan') {
+                    steps {
+                        container('osv') {
+                            sh 'osv-scanner scan source -r .'
+                        }
+                    }
+                }
+            }
+        }
+    }
+    post {
+        success {
+            emailext(to: '$DEFAULT_RECIPIENTS', subject: "SUCCESS: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: "Branch: ${env.BRANCH_NAME ?: 'unknown'}\nBuild: ${env.BUILD_URL}")
+        }
+        failure {
+            emailext(to: '$DEFAULT_RECIPIENTS', subject: "FAILURE: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: "Branch: ${env.BRANCH_NAME ?: 'unknown'}\nBuild: ${env.BUILD_URL}")
+        }
+        always {
+            echo 'Ephemeral Flutter validation pod released after this run.'
+        }
+    }
+}

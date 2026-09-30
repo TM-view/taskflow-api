@@ -499,6 +499,13 @@ pipeline {
             }
         }
 
+        stage('21.5 Pipeline Health Gate') {
+            when { branch 'main' }
+            steps {
+                sh 'node ci/pipeline-health.mjs'
+            }
+        }
+
         // --- 17. DEPLOY PRODUCTION (Lab 04 + Lab 07 - Blue/Green + Approval Gate) ---
         stage('22. Deploy Production (Blue/Green)') {
             when {
@@ -545,6 +552,14 @@ pipeline {
         }
     }
     post {
+        success {
+            emailext(to: '$DEFAULT_RECIPIENTS', subject: "SUCCESS: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: "Branch: ${env.BRANCH_NAME ?: 'unknown'}\nCommit: ${env.GIT_COMMIT ?: 'unknown'}\nBuild: ${env.BUILD_URL}")
+        }
+        failure {
+            emailext(to: '$DEFAULT_RECIPIENTS', subject: "FAILURE: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: "Branch: ${env.BRANCH_NAME ?: 'unknown'}\nCommit: ${env.GIT_COMMIT ?: 'unknown'}\nBuild: ${env.BUILD_URL}")
+        }
         always {
             script {
                 if (env.BRANCH_NAME == 'lab08') {
