@@ -1,4 +1,4 @@
-﻿pipeline {
+pipeline {
     agent {
         kubernetes {
             defaultContainer 'node'
