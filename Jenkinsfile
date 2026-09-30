@@ -1,17 +1,71 @@
-pipeline {
-    agent any
-    tools {
-        nodejs 'node20'
+﻿pipeline {
+    agent {
+        kubernetes {
+            defaultContainer 'node'
+            yaml '''
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: jenkins-agents
+spec:
+  serviceAccountName: jenkins
+  restartPolicy: Never
+  containers:
+  - name: node
+    image: node:20-bookworm-slim
+    command: ['cat']
+    tty: true
+    resources:
+      requests: {cpu: 500m, memory: 1Gi}
+      limits: {cpu: '2', memory: 3Gi}
+  - name: buildkit
+    image: moby/buildkit:v0.20.2-rootless
+    command: ['cat']
+    tty: true
+    securityContext:
+      runAsUser: 1000
+      runAsGroup: 1000
+      seccompProfile:
+        type: Unconfined
+    resources:
+      requests: {cpu: 500m, memory: 1Gi}
+      limits: {cpu: '2', memory: 3Gi}
+  - name: trivy
+    image: aquasec/trivy:0.69.3
+    command: ['cat']
+    tty: true
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: '1', memory: 1Gi}
+  - name: kubectl
+    image: bitnami/kubectl:1.33
+    command: ['cat']
+    tty: true
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {cpu: 500m, memory: 512Mi}
+  - name: gitleaks
+    image: zricethezav/gitleaks:v8.24.2
+    command: ['cat']
+    tty: true
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {cpu: 500m, memory: 512Mi}
+  - name: semgrep
+    image: semgrep/semgrep:1.144.0
+    command: ['cat']
+    tty: true
+    resources:
+      requests: {cpu: 250m, memory: 512Mi}
+      limits: {cpu: '1', memory: 2Gi}
+'''
+        }
     }
     environment {
         APP_NAME = 'taskflow-api'
         NODE_ENV = 'test'
-        REGISTRY = '127.0.0.1:5001'
         K8S_REGISTRY = 'registry:5000'
-        KUBECONFIG = '/var/jenkins_home/.kube/config'
-        LOCALSTACK_ENDPOINT = 'http://host.docker.internal:4566'
-        AWS_ACCESS_KEY_ID = 'test'
-        AWS_SECRET_ACCESS_KEY = 'test'
+        LOCALSTACK_ENDPOINT = 'http://localstack.default.svc.cluster.local:4566'
         AWS_DEFAULT_REGION = 'us-east-1'
     }
     options {
@@ -42,21 +96,8 @@ pipeline {
             }
         }
 
-        // --- 1. SECRETS DETECTION (Lab 06) ---
-        stage('1. Secrets Detection') {
-            steps {
-                echo 'Running Gitleaks secrets detection...'
-                sh 'npx gitleaks detect --source . --verbose --report-path gitleaks-report.json || true'
-            }
-            post {
-                always {
-                    archiveArtifacts artifacts: 'gitleaks-report.json', allowEmptyArchive: true
-                }
-            }
-        }
-
         // --- 2. INSTALL DEPENDENCIES (Lab 03) ---
-        stage('2. Install') {
+        stage('2. Install Dependencies') {
             steps {
                 dir('backend') {
                     sh 'npm ci'
@@ -65,66 +106,47 @@ pipeline {
         }
 
         // --- 3. SAST & CODE QUALITY (Lab 03 + Lab 06) ---
-        stage('3. SAST & Lint') {
-            steps {
-                dir('backend') {
-                    echo 'Running Lint and SAST Security Analysis...'
-                    sh 'npm run lint || true'
-                    sh 'npx eslint --plugin security src/ -f json -o eslint-sarif.json || true'
-                    sh 'npx semgrep --config=p/owasp-top-ten --config=p/nodejs --sarif -o semgrep.sarif src/ || true'
-                }
-            }
-            post {
-                always {
-                    dir('backend') {
-                        archiveArtifacts artifacts: 'eslint-sarif.json, semgrep.sarif', allowEmptyArchive: true
-                    }
-                }
-            }
-        }
-
-        // --- 4. SCA - SOFTWARE COMPONENT ANALYSIS (Lab 06) ---
-        stage('4. SCA - npm audit') {
-            steps {
-                dir('backend') {
-                    script {
-                        sh 'npm audit --audit-level=high --json > audit.json || true'
-                        
-                        def criticalStr = sh(
-                            script: "node -e \"const fs = require('fs'); const data = JSON.parse(fs.readFileSync('audit.json')); console.log(data.metadata?.vulnerabilities?.critical || 0);\"",
-                            returnStdout: true
-                        ).trim()
-                        
-                        def critical = criticalStr.toInteger()
-
-                        if (critical > 0) {
-                            error("Blocking: ${critical} critical vulnerabilities found")
+        stage('3. Parallel Quality Gates') {
+            failFast true
+            parallel {
+                stage('Lint and SAST') {
+                    steps {
+                        dir('backend') {
+                            sh 'npx eslint --rule "prettier/prettier: off" "{src,apps,libs,test}/**/*.ts"'
+                            container('semgrep') {
+                                sh 'semgrep scan --error --config p/owasp-top-ten --config p/nodejs --sarif --output semgrep.sarif src/'
+                            }
                         }
-                        echo "SCA passed with 0 critical vulnerabilities (warnings allowed)"
+                    }
+                    post {
+                            always { dir('backend') { archiveArtifacts artifacts: 'semgrep.sarif', allowEmptyArchive: true } }
                     }
                 }
-            }
-            post {
-                always {
-                    dir('backend') {
-                        archiveArtifacts artifacts: 'audit.json', allowEmptyArchive: true
+                stage('Unit Tests') {
+                    steps { dir('backend') { sh 'npx jest --coverage --reporters=default --reporters=jest-junit' } }
+                    post {
+                        always {
+                            dir('backend') {
+                                junit 'reports/junit.xml'
+                                archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
+                            }
+                        }
                     }
                 }
-            }
-        }
-
-        // --- 5. UNIT TEST & COVERAGE (Lab 03 + Lab 05) ---
-        stage('5. Unit Test & Coverage') {
-            steps {
-                dir('backend') {
-                    sh 'npx jest --coverage --reporters=default --reporters=jest-junit'
+                stage('SCA') {
+                    steps { dir('backend') { sh 'npm audit --audit-level=high --json > audit.json' } }
+                    post {
+                        always { dir('backend') { archiveArtifacts artifacts: 'audit.json', allowEmptyArchive: true } }
+                    }
                 }
-            }
-            post {
-                always {
-                    dir('backend') {
-                        junit 'reports/junit.xml'
-                        archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
+                stage('Secrets Detection') {
+                    steps {
+                        container('gitleaks') {
+                            sh 'gitleaks detect --source . --verbose --report-path gitleaks-report.json'
+                        }
+                    }
+                    post {
+                        always { archiveArtifacts artifacts: 'gitleaks-report.json', allowEmptyArchive: true }
                     }
                 }
             }
@@ -134,8 +156,10 @@ pipeline {
         stage('6. SonarQube Analysis') {
             steps {
                 dir('backend') {
-                    withSonarQubeEnv('SonarQube') {
-                        sh 'npx sonar-scanner -Dsonar.projectKey=taskflow-api -Dsonar.sources=src -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info || true'
+                    withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+                        withSonarQubeEnv('SonarQube') {
+                            sh 'npx sonar-scanner -Dsonar.projectKey=taskflow-api -Dsonar.sources=src -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info -Dsonar.token="$SONAR_TOKEN"'
+                        }
                     }
                 }
             }
@@ -153,7 +177,7 @@ pipeline {
             steps {
                 dir('backend') {
                     echo 'Generating SBOM with CycloneDX...'
-                    sh 'npx @cyclonedx/cyclonedx-npm --output-file bom.cdx.json || true'
+                    sh 'npx @cyclonedx/cyclonedx-npm --output-file bom.cdx.json'
                 }
             }
             post {
@@ -171,7 +195,8 @@ pipeline {
                 dir('backend') {
                     script {
                         echo 'Evaluating Security Policy via OPA...'
-                        sh 'npx @open-policy-agent/opa eval --data ../policy/security.rego --input audit.json "data.security.allow" || true'
+                        sh 'npx @open-policy-agent/opa eval --format raw --data ../policy/security.rego --input audit.json "data.security.allow" > opa-result.txt'
+                        sh 'grep -qx true opa-result.txt'
                     }
                 }
             }
@@ -179,43 +204,26 @@ pipeline {
 
         // --- 10. BUILD DOCKER IMAGE & PUSH (Lab 07) ---   
         stage('10. Build Image') {
-            // The lab10 branch is used for pipeline email validation on a Kubernetes-only agent.
-            // Keep Docker image builds enabled on the deployment branches.
-            when { not { branch 'lab10' } }
             steps {
                 dir('backend') {
                     script {
                         env.IMAGE_TAG = sh(script: 'git rev-parse --short=7 HEAD', returnStdout: true).trim()
                         echo "Building Docker Image with tag: ${env.IMAGE_TAG}"
-                        sh "docker build -t ${REGISTRY}/${APP_NAME}:${env.IMAGE_TAG} ."
-                        sh "docker push ${REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}"
-                        sh """
-                            set -eu
-                            node=taskflow-cluster-control-plane
-                            if ! docker inspect "\$node" >/dev/null 2>&1; then
-                                echo "Required Kind node container '\$node' does not exist." >&2
-                                exit 1
-                            fi
-
-                            if [ "\$(docker inspect -f '{{.State.Running}}' "\$node")" != true ]; then
-                                echo "Starting stopped Kind node container '\$node'."
-                                docker start "\$node" >/dev/null
-                            fi
-
-                            for attempt in \$(seq 1 60); do
-                                if docker exec "\$node" ctr version >/dev/null 2>&1; then
-                                    break
-                                fi
-                                if [ "\$attempt" -eq 60 ]; then
-                                    echo "Timed out waiting for containerd in '\$node'." >&2
-                                    docker logs --tail 50 "\$node" >&2 || true
-                                    exit 1
-                                fi
-                                sleep 2
-                            done
-
-                            docker exec "\$node" ctr -n k8s.io images pull --plain-http ${K8S_REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}
-                        """
+                        container('buildkit') {
+                            withEnv([
+                                "IMAGE_REF=${K8S_REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}",
+                                "BUILDKITD_FLAGS=--oci-worker-no-process-sandbox --config ${env.WORKSPACE}/ci/buildkitd.toml"
+                            ]) {
+                                sh '''
+                                    set -eu
+                                    buildctl-daemonless.sh build \\
+                                      --frontend dockerfile.v0 \\
+                                      --local context=. \\
+                                      --local dockerfile=. \\
+                                      --output "type=image,name=${IMAGE_REF},push=true,registry.insecure=true"
+                                '''
+                            }
+                        }
                     }
                 }
             }
@@ -223,11 +231,11 @@ pipeline {
 
         // --- 11. CONTAINER SCAN - TRIVY (Lab 07) ---
         stage('11. Container Scan (Trivy)') {
-            when { not { branch 'lab10' } }
             steps {
-                echo 'Scanning container image with Trivy via Docker...'
-                sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache/ aquasec/trivy image --scanners vuln --timeout 10m --format sarif ${REGISTRY}/${APP_NAME}:${env.IMAGE_TAG} > trivy.sarif"
-                sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache/ -v \$PWD:/workspace -w /workspace aquasec/trivy image --scanners vuln --skip-db-update --exit-code 1 --severity HIGH,CRITICAL ${REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}"
+                container('trivy') {
+                    sh "trivy image --insecure --image-src remote --timeout 10m --format sarif --output trivy.sarif ${K8S_REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}"
+                    sh "trivy image --insecure --image-src remote --skip-db-update --exit-code 1 --severity HIGH,CRITICAL ${K8S_REGISTRY}/${APP_NAME}:${env.IMAGE_TAG}"
+                }
             }
             post {
                 always {
@@ -446,7 +454,9 @@ pipeline {
                 branch 'develop'
             }
             steps {
-                script {
+                container('kubectl') {
+                    withCredentials([file(credentialsId: 'jenkins-kubeconfig', variable: 'KUBECONFIG')]) {
+                    script {
                     echo "Deploying to Staging Environment..."
 
                     sh "kubectl get svc taskflow -o yaml > svc-before-${BUILD_NUMBER}.yaml"
@@ -478,10 +488,14 @@ pipeline {
                     sh "cat svc-diff-${BUILD_NUMBER}.txt"
 
                     echo "Staging: Switched traffic from ${current} to ${next}"
+                    }
+                    }
                 }
             }
             post {
                 failure {
+                    container('kubectl') {
+                    withCredentials([file(credentialsId: 'jenkins-kubeconfig', variable: 'KUBECONFIG')]) {
                     script {
                         echo 'Automatic rollback firing for failed staging deployment'
                         if (env.DEPLOY_PREVIOUS_COLOR) {
@@ -495,6 +509,8 @@ pipeline {
                         }
                         sh "kubectl get service taskflow -o custom-columns='NAME:.metadata.name,COLOR:.spec.selector.color'"
                         sh 'kubectl get endpoints taskflow -o wide'
+                    }
+                    }
                     }
                 }
                 always {
@@ -516,6 +532,8 @@ pipeline {
                 branch 'main'
             }
             steps {
+                container('kubectl') {
+                withCredentials([file(credentialsId: 'jenkins-kubeconfig', variable: 'KUBECONFIG')]) {
                 input message: 'Approve Deployment to Production Environment?'
                 script {
                     echo "Deploying to Production Environment..."
@@ -535,9 +553,13 @@ pipeline {
                     sh "kubectl set selector service/taskflow app=taskflow-api,color=${next}"
                     echo "Production: Switched traffic from ${current} to ${next}"
                 }
+                }
+                }
             }
             post {
                 failure {
+                    container('kubectl') {
+                    withCredentials([file(credentialsId: 'jenkins-kubeconfig', variable: 'KUBECONFIG')]) {
                     script {
                         echo "--------------------------------------------------"
                         echo "Deploy Failed! Initiating Automatic Rollback..."
@@ -550,6 +572,8 @@ pipeline {
                             echo "Rollback skipped: DEPLOY_PREVIOUS_COLOR not defined."
                         }
                         echo "--------------------------------------------------"
+                    }
+                    }
                     }
                 }
             }

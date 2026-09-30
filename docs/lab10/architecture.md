@@ -1,47 +1,50 @@
-# Lab 10 pipeline architecture
+﻿# Lab 10 pipeline architecture
 
 ```mermaid
 flowchart TD
-  subgraph API[API job — root Jenkinsfile]
-    A0[Checkout / secret scan] --> A1[Install]
-    A1 --> A2[Lint and SAST]
-    A1 --> A3[Unit tests and coverage]
-    A1 --> A4[SCA / SBOM / policy / quality gates]
-    A2 --> A5[E2E and image build]
-    A3 --> A5
-    A4 --> A5
-    A5 --> A6[Image scan]
-    A6 --> A7{main branch?}
-    A7 -->|Yes| A8[Manual production approval]
-    A8 --> A9[Pipeline Health Gate: last 20 builds >= 90%]
-    A9 --> A10[Blue/green rollout and smoke check]
-    A10 --> A11[Success/failure email]
-    A7 -->|No| A11
+  subgraph API[API pipeline - root Jenkinsfile]
+    A0[Checkout on ephemeral Kubernetes pod] --> A1[npm ci]
+    A1 --> A2{Parallel quality gates - fail fast}
+    A2 --> A21[ESLint + Semgrep SAST]
+    A2 --> A22[Jest unit tests + coverage]
+    A2 --> A23[npm audit]
+    A2 --> A24[Gitleaks]
+    A21 --> A3[Sonar analysis + quality gate]
+    A22 --> A3
+    A23 --> A3
+    A24 --> A3
+    A3 --> A4[SBOM + OPA policy]
+    A4 --> A5[Build and push with rootless BuildKit]
+    A5 --> A6[Trivy image scan]
+    A6 --> A7{Branch}
+    A7 -->|develop| A8[Staging blue-green rollout + smoke test]
+    A7 -->|main| A9[Pipeline Health Gate: >=90% of prior 20]
+    A9 --> A10[Manual approval]
+    A10 --> A11[Production blue-green rollout + smoke test]
+    A8 --> A12[Email result with branch and build URL]
+    A11 --> A12
+    A7 -->|other| A12
   end
-  subgraph Mobile[Mobile job — frontend/Jenkinsfile]
-    M0[Checkout] --> M1[Flutter pub get]
-    M1 --> M2[Flutter analyze]
-    M1 --> M3[Flutter tests + coverage]
-    M1 --> M4[OSV dependency scan]
-    M2 --> M5[Flutter validation result]
-    M3 --> M5
-    M4 --> M5
-    M5 --> M6[Success/failure email]
+  subgraph Mobile[Mobile pipeline - frontend/Jenkinsfile]
+    M0[Checkout on ephemeral Kubernetes pod] --> M1[flutter pub get]
+    M1 --> M2{Parallel quality gates - fail fast}
+    M2 --> M21[flutter analyze]
+    M2 --> M22[flutter test --coverage]
+    M2 --> M23[OSV SCA]
+    M21 --> M3[Email result with branch and build URL]
+    M22 --> M3
+    M23 --> M3
   end
 ```
 
-## Required Jenkins setup
+## Jenkins setup required before a real run
 
-- Install/configure the Kubernetes and Email Extension plugins. Set SMTP and the global default recipient list used by `$DEFAULT_RECIPIENTS`.
-- Create a Pipeline job for `frontend/Jenkinsfile`, using this repository's `main` branch. Keep the existing API job pointed at root `Jenkinsfile`.
-- Ensure Kubernetes agents can pull `ghcr.io/cirruslabs/flutter:3.44.0` and `ghcr.io/google/osv-scanner:v2.2.2`, and permit pods in namespace `jenkins-agents` with service account `jenkins`.
-- Set Jenkins environment variable `PROMETHEUS_URL` to a Prometheus endpoint reachable from the API build environment. The health gate fails closed when the endpoint is unset, unavailable, has fewer than 20 finished builds, or reports under 90% success.
-- Ensure Jenkins Prometheus metrics expose `default_jenkins_builds_build_result_ordinal` with `jenkins_job` and `number` labels, and set `PROMETHEUS_JENKINS_JOB` if the metric's job label is not `taskflow-api`.
+- Kubernetes plugin cloud: connect to the Lab 09 cluster, permit agents in `jenkins-agents`, and use service account `jenkins`. The API pod needs the `node`, `buildkit`, `trivy`, `kubectl`, `gitleaks`, and `semgrep` images to be pullable. `buildkit` requires the unprivileged user-namespace support described by the upstream rootless BuildKit setup.
+- Jenkins credentials: add `sonar-token` as Secret text and `jenkins-kubeconfig` as Secret file. The latter must target the same Kubernetes cluster and namespace as the Jenkins Lab 09 setup. The local HTTP registry `registry:5000` is anonymous, so there is no registry secret in this configuration.
+- Configure `PROMETHEUS_URL` in Jenkins to an HTTP endpoint reachable from the agent Pod (Lab 09 Prometheus), and `PROMETHEUS_JENKINS_JOB=taskflow-multibranch/main` if the Jenkins job has that metric label. The gate fails closed if the endpoint is absent or unreachable, fewer than 20 completed builds exist, or success rate is below 90%.
+- Configure SonarQube server name `SonarQube`, NodeJS tool `node20`, Email Extension SMTP, and global default recipients (`DEFAULT_RECIPIENTS`). The Jenkins Prometheus plugin must export `default_jenkins_builds_build_result_ordinal` with `jenkins_job` and `number` labels.
+- Create a multibranch API job using root `Jenkinsfile` and a separate mobile job using `frontend/Jenkinsfile`. The mobile pipeline intentionally validates and emails only; it does not create an APK/AAB, matching the requested email-only outcome.
 
-## Integration boundary
+## Scope and known limits
 
-The mobile job is configured to use ephemeral Kubernetes pods and only validates Flutter code; it does not produce or publish an app package. The existing API Jenkinsfile still uses `agent any` and several host-Docker commands (`docker run --volumes-from jenkins`), so it cannot be moved to an isolated Kubernetes pod by changing its agent declaration alone. To meet the all-Kubernetes API requirement, first move those Docker/Terraform/Ansible operations to pod sidecars or Kubernetes-native tools and provide the required registry, kubeconfig, and SSH access. The Lab 10 health gate and notifications are present, but the API pipeline is not yet wholly dynamic-agent based.
-
-For the current email-focused `lab10` branch run, API image build and Trivy stages are skipped because its Kubernetes agent has no Docker CLI. Other branches retain those stages. This lets the branch complete CI and send a result email, but does not demonstrate the full container-build portion of the capstone.
-
-The Flutter project in this workspace is `frontend/`; it is the only mobile client modified. No external mobile repository is part of this pipeline setup.
+The Lab 10 API path now declares a dynamic Kubernetes pod and uses BuildKit/Trivy sidecars instead of Docker CLI, including on `lab10`. The older Lab 08 Terraform/Ansible branch still contains Docker-engine commands and therefore is not made Kubernetes-agent compatible by this Lab 10 change. Production has not been deployed: the live Prometheus history currently reports only 13/20 successful builds (65%), so the production gate correctly blocks it. The reviewer-assigned API/mobile feature demo and deliberate bad-change gate demonstration still require a human change, push, and Jenkins run.
