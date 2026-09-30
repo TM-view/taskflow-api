@@ -12,7 +12,7 @@ spec:
   restartPolicy: Never
   containers:
   - name: flutter
-    image: ghcr.io/cirruslabs/flutter:3.44.0
+    image: cirruslabs/flutter:stable
     command: ['cat']
     tty: true
     resources:
@@ -51,12 +51,18 @@ spec:
             failFast true
             parallel {
                 stage('Flutter Analyze') {
-                    steps { sh 'flutter analyze --fatal-infos' }
+                    steps {
+                        sh 'flutter analyze --fatal-infos'
+                    }
                 }
                 stage('Flutter Tests') {
-                    steps { sh 'flutter test --coverage' }
+                    steps {
+                        sh 'flutter test --coverage'
+                    }
                     post {
-                        always { archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true }
+                        always {
+                            archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
+                        }
                     }
                 }
                 stage('OSV Dependency Scan') {
@@ -68,18 +74,63 @@ spec:
                 }
             }
         }
+        stage('Build Debug APK') {
+            steps {
+                sh 'flutter build apk --debug'
+            }
+            post {
+                success {
+                    archiveArtifacts artifacts: 'build/app/outputs/flutter-apk/app-debug.apk', allowEmptyArchive: true
+                }
+            }
+        }
+        stage('Build Release AAB (Signed)') {
+            when {
+                branch 'main'
+            }
+            steps {
+                withCredentials([
+                    file(credentialsId: 'android-keystore', variable: 'KEYSTORE_FILE'),
+                    string(credentialsId: 'android-keystore-password', variable: 'KEYSTORE_PASSWORD'),
+                    string(credentialsId: 'android-key-alias', variable: 'KEY_ALIAS'),
+                    string(credentialsId: 'android-key-password', variable: 'KEY_PASSWORD')
+                ]) {
+                    sh '''
+                        cat <<EOF > android/key.properties
+storeFile=${KEYSTORE_FILE}
+storePassword=${KEYSTORE_PASSWORD}
+keyAlias=${KEY_ALIAS}
+keyPassword=${KEY_PASSWORD}
+EOF
+                        flutter build appbundle --release
+                        rm -f android/key.properties
+                    '''
+                }
+            }
+            post {
+                success {
+                    archiveArtifacts artifacts: 'build/app/outputs/bundle/release/*.aab', allowEmptyArchive: true
+                }
+            }
+        }
     }
     post {
         success {
-            emailext(to: '$DEFAULT_RECIPIENTS', subject: "SUCCESS: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                body: "Branch: ${env.BRANCH_NAME ?: 'unknown'}\nBuild: ${env.BUILD_URL}")
+            emailext(
+                to: '$DEFAULT_RECIPIENTS',
+                subject: "SUCCESS: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: "Branch: ${env.BRANCH_NAME ?: 'unknown'}\nCommit: ${env.GIT_COMMIT ?: 'unknown'}\nBuild: ${env.BUILD_URL}"
+            )
         }
         failure {
-            emailext(to: '$DEFAULT_RECIPIENTS', subject: "FAILURE: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                body: "Branch: ${env.BRANCH_NAME ?: 'unknown'}\nBuild: ${env.BUILD_URL}")
+            emailext(
+                to: '$DEFAULT_RECIPIENTS',
+                subject: "FAILURE: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: "Branch: ${env.BRANCH_NAME ?: 'unknown'}\nCommit: ${env.GIT_COMMIT ?: 'unknown'}\nBuild: ${env.BUILD_URL}"
+            )
         }
         always {
-            echo 'Ephemeral Flutter validation pod released after this run.'
+            echo 'Ephemeral Flutter agent pod released after run.'
         }
     }
 }

@@ -67,6 +67,7 @@ spec:
         K8S_REGISTRY = 'registry:5000'
         LOCALSTACK_ENDPOINT = 'http://localstack.default.svc.cluster.local:4566'
         AWS_DEFAULT_REGION = 'us-east-1'
+        PROMETHEUS_URL = 'http://prometheus-server.monitoring.svc.cluster.local:9090'
     }
     options {
         timeout(time: 30, unit: 'MINUTES')
@@ -195,7 +196,7 @@ spec:
                 dir('backend') {
                     script {
                         echo 'Evaluating Security Policy via OPA...'
-                        sh 'npx @open-policy-agent/opa eval --format raw --data ../policy/security.rego --input audit.json "data.security.allow" > opa-result.txt'
+                        sh 'npx --yes --package=@open-policy-agent/opa opa eval --format raw --data ../policy/security.rego --input audit.json "data.security.allow" > opa-result.txt'
                         sh 'grep -qx true opa-result.txt'
                     }
                 }
