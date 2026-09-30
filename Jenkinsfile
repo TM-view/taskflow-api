@@ -58,6 +58,13 @@ spec:
     resources:
       requests: {cpu: 250m, memory: 512Mi}
       limits: {cpu: '1', memory: 2Gi}
+  - name: opa
+    image: openpolicyagent/opa:0.68.0-debug
+    command: ['cat']
+    tty: true
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {cpu: 500m, memory: 512Mi}
 '''
         }
     }
@@ -194,10 +201,12 @@ spec:
         stage('9. Policy Gate (OPA)') {
             steps {
                 dir('backend') {
-                    script {
-                        echo 'Evaluating Security Policy via OPA...'
-                        sh 'npx --yes --package=@open-policy-agent/opa opa eval --format raw --data ../policy/security.rego --input audit.json "data.security.allow" > opa-result.txt'
-                        sh 'grep -qx true opa-result.txt'
+                    container('opa') {
+                        script {
+                            echo 'Evaluating Security Policy via OPA...'
+                            sh 'opa eval --format raw --data ../policy/security.rego --input audit.json "data.security.allow" > opa-result.txt'
+                            sh 'grep -qx true opa-result.txt'
+                        }
                     }
                 }
             }
