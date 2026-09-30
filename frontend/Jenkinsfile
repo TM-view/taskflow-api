@@ -12,7 +12,7 @@ spec:
   restartPolicy: Never
   containers:
   - name: flutter
-    image: cirruslabs/flutter:stable
+    image: ghcr.io/cirruslabs/flutter:stable
     command: ['cat']
     tty: true
     resources:
