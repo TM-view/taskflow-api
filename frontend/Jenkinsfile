@@ -44,7 +44,9 @@ spec:
     stages {
         stage('Pub Get') {
             steps {
-                sh 'flutter pub get --enforce-lockfile'
+                dir('frontend') {
+                    sh 'flutter pub get --enforce-lockfile'
+                }
             }
         }
         stage('Parallel Quality Gates') {
@@ -52,23 +54,31 @@ spec:
             parallel {
                 stage('Flutter Analyze') {
                     steps {
-                        sh 'flutter analyze --fatal-infos'
+                        dir('frontend') {
+                            sh 'flutter analyze --fatal-infos'
+                        }
                     }
                 }
                 stage('Flutter Tests') {
                     steps {
-                        sh 'flutter test --coverage'
+                        dir('frontend') {
+                            sh 'flutter test --coverage'
+                        }
                     }
                     post {
                         always {
-                            archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
+                            dir('frontend') {
+                                archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
+                            }
                         }
                     }
                 }
                 stage('OSV Dependency Scan') {
                     steps {
-                        container('osv') {
-                            sh 'osv-scanner scan source -r .'
+                        dir('frontend') {
+                            container('osv') {
+                                sh 'osv-scanner scan source -r .'
+                            }
                         }
                     }
                 }
@@ -76,11 +86,15 @@ spec:
         }
         stage('Build Debug APK') {
             steps {
-                sh 'flutter build apk --debug'
+                dir('frontend') {
+                    sh 'flutter build apk --debug'
+                }
             }
             post {
                 success {
-                    archiveArtifacts artifacts: 'build/app/outputs/flutter-apk/app-debug.apk', allowEmptyArchive: true
+                    dir('frontend') {
+                        archiveArtifacts artifacts: 'build/app/outputs/flutter-apk/app-debug.apk', allowEmptyArchive: true
+                    }
                 }
             }
         }
@@ -89,27 +103,31 @@ spec:
                 branch 'main'
             }
             steps {
-                withCredentials([
-                    file(credentialsId: 'android-keystore', variable: 'KEYSTORE_FILE'),
-                    string(credentialsId: 'android-keystore-password', variable: 'KEYSTORE_PASSWORD'),
-                    string(credentialsId: 'android-key-alias', variable: 'KEY_ALIAS'),
-                    string(credentialsId: 'android-key-password', variable: 'KEY_PASSWORD')
-                ]) {
-                    sh '''
-                        cat <<EOF > android/key.properties
+                dir('frontend') {
+                    withCredentials([
+                        file(credentialsId: 'android-keystore', variable: 'KEYSTORE_FILE'),
+                        string(credentialsId: 'android-keystore-password', variable: 'KEYSTORE_PASSWORD'),
+                        string(credentialsId: 'android-key-alias', variable: 'KEY_ALIAS'),
+                        string(credentialsId: 'android-key-password', variable: 'KEY_PASSWORD')
+                    ]) {
+                        sh '''
+                            cat <<EOF > android/key.properties
 storeFile=${KEYSTORE_FILE}
 storePassword=${KEYSTORE_PASSWORD}
 keyAlias=${KEY_ALIAS}
 keyPassword=${KEY_PASSWORD}
 EOF
-                        flutter build appbundle --release
-                        rm -f android/key.properties
-                    '''
+                            flutter build appbundle --release
+                            rm -f android/key.properties
+                        '''
+                    }
                 }
             }
             post {
                 success {
-                    archiveArtifacts artifacts: 'build/app/outputs/bundle/release/*.aab', allowEmptyArchive: true
+                    dir('frontend') {
+                        archiveArtifacts artifacts: 'build/app/outputs/bundle/release/*.aab', allowEmptyArchive: true
+                    }
                 }
             }
         }
