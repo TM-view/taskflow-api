@@ -256,7 +256,6 @@ spec:
 
         // --- 12. IAC LINT & VALIDATE & SCAN (Lab 08) ---
         stage('12. Prepare Lab 08 SSH Key') {
-            when { branch 'lab08' }
             steps {
                 script {
                     sh 'mkdir -p .lab08; if [ ! -f .lab08/taskflow-api ]; then ssh-keygen -q -t ed25519 -N "" -f .lab08/taskflow-api; fi; chmod 600 .lab08/taskflow-api'
@@ -266,7 +265,6 @@ spec:
         }
 
         stage('13. IaC Lint & Validate') {
-            when { branch 'lab08' }
             parallel {
                 stage('Terraform Validate') {
                     steps {
@@ -288,7 +286,6 @@ spec:
         }
 
         stage('14. IaC Security Scan') {
-            when { branch 'lab08' }
             steps {
                 sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE" aquasec/tfsec:latest "$WORKSPACE/infra/terraform" --format json > tfsec-report.json'
                 sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE" bridgecrew/checkov:latest -d "$WORKSPACE/infra/terraform" -o json > checkov-report.json'
@@ -301,7 +298,6 @@ spec:
         }
 
         stage('15. Validate Docker Host and Prepare Remote State') {
-            when { branch 'lab08' }
             steps {
                 sh '''
                     if ! docker info >/dev/null 2>&1; then
@@ -355,7 +351,6 @@ spec:
         }
 
         stage('16. Terraform Plan') {
-            when { branch 'lab08' }
             steps {
                 dir('infra/terraform') {
                     sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 init -input=false -reconfigure'
@@ -376,7 +371,6 @@ spec:
         }
 
         stage('17. Approve Terraform Apply') {
-            when { branch 'lab08' }
             steps {
                 sh 'cat infra/terraform/plan-summary.txt'
                 input message: 'Review the plan summary in this build log, then approve the Lab 08 apply.'
@@ -384,7 +378,6 @@ spec:
         }
         
         stage('18. Terraform Apply') {
-            when { branch 'lab08' }
             steps {
                 dir('infra/terraform') {
                     sh 'docker run --rm --volumes-from jenkins -w "$WORKSPACE/infra/terraform" -e TF_VAR_ssh_public_key -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION hashicorp/terraform:1.12.2 apply -input=false -auto-approve tfplan'
@@ -421,7 +414,6 @@ spec:
         }
 
         stage('19. Configure Host with Ansible') {
-            when { branch 'lab08' }
             steps {
                 sh '''
                     for attempt in $(seq 1 60); do
@@ -443,7 +435,6 @@ spec:
         }
 
         stage('20. Destroy Lab 08 Infrastructure') {
-            when { branch 'lab08' }
             steps {
                 input message: 'After saving the plan and apply evidence, approve Terraform destroy to leave no lab resources running.'
                 dir('infra/terraform') {
