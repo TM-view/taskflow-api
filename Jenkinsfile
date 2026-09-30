@@ -217,7 +217,7 @@ spec:
             steps {
                 dir('backend') {
                     script {
-                        env.IMAGE_TAG = sh(script: 'git rev-parse --short=7 HEAD', returnStdout: true).trim()
+                        env.IMAGE_TAG = env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : (env.BUILD_NUMBER ? "build-${env.BUILD_NUMBER}" : 'latest')
                         echo "Building Docker Image with tag: ${env.IMAGE_TAG}"
                         container('buildkit') {
                             withEnv([
